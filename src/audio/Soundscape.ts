@@ -13,11 +13,15 @@ export interface SoundWorld {
   /** Positions of people near a point: walking flag and position. */
   peopleNear: (p: THREE.Vector3, r: number) => { pos: THREE.Vector3; walking: boolean }[];
   interior: (p: THREE.Vector3) => number;
+  /** How much road traffic is around a point (0 none … 1 a busy street). */
+  street: (p: THREE.Vector3) => number;
   /** Nearest point of the Marine Drive sea wall and the distance to it. */
   sea?: (p: THREE.Vector3) => { point: THREE.Vector3; d: number };
 }
 
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
+/** How far from the nearest of Churchgate's PA speakers an announcement carries (m) ⚠. */
+const PA_RANGE = 90;
 
 /** Drives all procedural audio from the world state each frame. */
 export class Soundscape {
@@ -35,7 +39,9 @@ export class Soundscape {
   private announced = new Set<number>();
   private walked = 0;
   private lastCam = new THREE.Vector3();
-  private voicesReady: SpeechSynthesisVoice[] = [];
+  /** Traffic around the listener (re-sampled twice a second). */
+  private streetK = 0;
+  private tStreet = 0;
   onSubtitle: (en: string, deva: string) => void = () => {};
   speech = true;
 
@@ -47,11 +53,6 @@ export class Soundscape {
     for (let i = 0; i < world.trains.views.length; i++) this.voices.push(new TrainVoice(this.audio));
     world.trains.on((e) => this.onTrain(e.type, e.train));
     this.lastState = world.trains.views.map(() => 'hidden');
-    if ('speechSynthesis' in window) {
-      const load = () => (this.voicesReady = speechSynthesis.getVoices());
-      load();
-      speechSynthesis.onvoiceschanged = load;
-    }
   }
 
   async start(): Promise<void> {
@@ -60,7 +61,13 @@ export class Soundscape {
 
   setEnabled(on: boolean): void {
     this.audio.setEnabled(on);
-    if (!on && 'speechSynthesis' in window) speechSynthesis.cancel();
+  }
+
+  /** How well Churchgate's PA carries to the listener (0 beyond PA_RANGE of every speaker). */
+  private paReach(): number {
+    let k = 0;
+    for (const s of this.world.speakers) k = Math.max(k, this.audio.reach(s, PA_RANGE));
+    return k;
   }
 
   private onTrain(type: string, v: TrainView): void {
@@ -70,14 +77,18 @@ export class Soundscape {
     if (type === 'arrived' && v.service) window.setTimeout(() => this.announce(v.service!), 9000);
   }
 
-  /** PA chime + trilingual departure announcement (Marathi, Hindi, English). */
-  announce(s: Service): void {
-    if (!this.audio.enabled || this.announced.has(s.id)) return;
+  /**
+   * PA chime + trilingual departure announcement (Marathi, Hindi, English), heard only within reach
+   * of the station's speakers. Returns false when the listener is out of reach (it is not marked as
+   * made, so the periodic call can still make it if they come back while the train stands).
+   */
+  announce(s: Service): boolean {
+    if (!this.audio.enabled || this.announced.has(s.id) || this.paReach() <= 0.001) return false;
     this.announced.add(s.id);
     this.tAnnounce = rnd(70, 110);
-    const cam = this.lastCam;
+    const cam = this.audio.listener;
     const near = [...this.world.speakers].sort((a, b) => a.distanceToSquared(cam) - b.distanceToSquared(cam)).slice(0, 3);
-    const wait = chime(this.audio, near.length ? near : [cam.clone()]);
+    const wait = chime(this.audio, near);
     const time = fmtTime(s.depart);
     const destEn = s.dest.charAt(0) + s.dest.slice(1).toLowerCase();
     const slowFastMr = s.mode === 'S' ? 'धीमी' : 'जलद';
@@ -86,24 +97,17 @@ export class Soundscape {
     const hi = `यात्रीगण कृपया ध्यान दें. प्लेटफॉर्म क्रमांक ${s.platform} से ${time} की ${s.destDeva} ${slowFastHi} लोकल जाएगी.`;
     const en = `Attention please. The ${time} ${destEn} ${s.mode === 'S' ? 'slow' : 'fast'} local will depart from platform number ${s.platform}.`;
     this.onSubtitle(en, hi);
-    if (!this.speech || !('speechSynthesis' in window)) return;
-    window.setTimeout(() => {
-      const say = (text: string, lang: string) => {
-        const u = new SpeechSynthesisUtterance(text);
-        const v = this.voicesReady.find((x) => x.lang === lang) ?? this.voicesReady.find((x) => x.lang.startsWith(lang.slice(0, 2)));
-        if (!v && lang !== 'en-IN') return;
-        if (v) u.voice = v;
-        u.lang = lang;
-        u.rate = 0.92;
-        u.pitch = 1.05;
-        u.volume = 0.75;
-        speechSynthesis.speak(u);
-      };
-      speechSynthesis.cancel();
-      say(mr, 'mr-IN');
-      say(hi, 'hi-IN');
-      say(en, 'en-IN');
-    }, wait * 1000);
+    if (this.speech)
+      this.audio.speak(
+        [
+          [mr, 'mr-IN'],
+          [hi, 'hi-IN'],
+          [en, 'en-IN'],
+        ],
+        wait,
+        () => this.paReach(),
+      );
+    return true;
   }
 
   update(dt: number, camera: THREE.Camera, hour: number): void {
@@ -112,12 +116,18 @@ export class Soundscape {
     const t = a.ctx.currentTime;
     const cam = camera.position;
     a.updateListener(camera);
+    a.updateSpeech();
     const interior = this.world.interior(cam);
     a.setSpace(interior);
     const people = this.world.peopleNear(cam, 16);
     const density = Math.min(1, people.length / 45);
     this.crowd.update((0.06 + 0.5 * density) * (0.45 + 0.55 * interior));
-    this.street.update(0.07 + 0.45 * (1 - interior), t);
+    this.tStreet -= dt;
+    if (this.tStreet <= 0) {
+      this.tStreet = 0.5;
+      this.streetK = this.world.street(cam);
+    }
+    this.street.update((0.03 + 0.4 * this.streetK) * (1 - 0.6 * interior), t);
     if (this.world.sea) {
       const sea = this.world.sea(cam);
       this.seaBed.update(dt, sea.point, sea.d);
@@ -178,8 +188,7 @@ export class Soundscape {
     this.tAnnounce -= dt;
     if (this.tAnnounce <= 0 && interior > 0.4) {
       const v = views.find((x) => x.state === 'dwell' && x.service && !this.announced.has(x.service.id));
-      if (v?.service) this.announce(v.service);
-      else this.tAnnounce = 20;
+      if (!v?.service || !this.announce(v.service)) this.tAnnounce = 20;
     }
     void hour;
   }

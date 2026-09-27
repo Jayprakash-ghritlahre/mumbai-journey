@@ -139,10 +139,10 @@ export function churchgateShots(d: JourneyDeps): Shot[] {
     },
     {
       name: 'exit',
-      duration: 19,
+      duration: 15,
       fov: 56,
       update: (t, c) => {
-        walkOut.apply(c.camera, easeInOut(t) * walkOut.length, c.T, { lookAhead: 6 });
+        walkOut.apply(c.camera, ease(t) * walkOut.length, c.T, { lookAhead: 8 });
         setPlayer(c.camera.position);
       },
     },

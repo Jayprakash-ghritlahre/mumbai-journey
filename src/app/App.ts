@@ -313,6 +313,9 @@ export class App {
         return [...this.ride.peopleNear(p, r), ...extra];
       },
       interior: (p) => (this.ride.contains(p) ? 0.55 : w.far ? (this.avMira && w.journey.mira ? w.journey.mira.interiorFactor(p) : 0) : w.interiorFactor(p)),
+      // Churchgate's streets by the vehicles near by; Mira Road's roads and auto stand; elsewhere on
+      // the line, only the distant city.
+      street: (p) => (!w.far ? Math.min(1, w.traffic.nearby(p, 110).length / 10) : this.avMira && !this.ride.contains(p) ? 0.7 : 0.15),
       sea: (p) => {
         const md = MD.axis;
         const q = md.project(p.x, p.z);
@@ -324,7 +327,7 @@ export class App {
       this.hud.sub(en, deva);
       window.setTimeout(() => this.hud.hideSub(), 9000);
     };
-    this.rideAudio = new RideAudio(this.sound.audio);
+    this.rideAudio = new RideAudio(this.sound.audio, w.railway.dMiraRoad);
     this.rideAudio.onSubtitle = this.sound.onSubtitle;
     void this.sound.start().then(() => this.sound?.setEnabled(this.soundOn));
   }
@@ -546,6 +549,7 @@ export class App {
       this.filmClock.base = 0;
       this.litHour = this.hour;
       this.ride.startHour = this.hour;
+      this.rideAudio?.reset();
       const ride = rideShots({ ride: this.ride, railway: this.world.railway, clock: this.filmClock });
       const arrive = this.ride.hourAt(this.ride.legs.length - 1, this.ride.legs[this.ride.legs.length - 1].duration);
       const cg = churchgateShots({ trains: this.world.trains, crowd: this.world.crowd, timetable: this.world.timetable, startHour: arrive, route: this.world.route, clock: this.filmClock, byTrain: true });

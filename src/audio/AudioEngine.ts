@@ -15,6 +15,10 @@ export class AudioEngine {
   private noiseBuffers = new Map<string, AudioBuffer>();
   enabled = true;
   private targetVolume = 0.9;
+  /** Where the listener is (the camera, as of the last `updateListener`). */
+  readonly listener = new THREE.Vector3();
+  /** The PA announcement being spoken, and how well it carries to the listener now. */
+  private pa: { reach: () => number; timer: number } | null = null;
 
   constructor() {
     const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -47,6 +51,8 @@ export class AudioEngine {
       l.upY.value = 1;
       l.upZ.value = 0;
     }
+    // Ask for the speech voices now: the browser loads them asynchronously.
+    if ('speechSynthesis' in window) speechSynthesis.getVoices();
   }
 
   async resume(): Promise<void> {
@@ -59,6 +65,65 @@ export class AudioEngine {
     const t = this.ctx.currentTime;
     this.master.gain.cancelScheduledValues(t);
     this.master.gain.setTargetAtTime(on ? this.targetVolume : 0, t, 0.4);
+    if (!on) this.cancelSpeech();
+  }
+
+  /**
+   * How much of a source at `pos` reaches the listener, for a sound that carries `range` metres:
+   * 1 within 60 % of the range, fading to 0 at it. The panners' inverse law levels off at their
+   * maxDistance and never reaches silence, so distant sources are gated with this as well.
+   */
+  reach(pos: THREE.Vector3, range: number): number {
+    return 1 - THREE.MathUtils.smoothstep(pos.distanceTo(this.listener), range * 0.6, range);
+  }
+
+  /**
+   * A PA announcement spoken after `wait` s, one language after another. Browser speech is not
+   * positional, so `reach` (0–1, for the listener where they are now) stands in for distance: the
+   * announcement starts only within reach, each language is spoken at the volume the reach gives
+   * when its turn comes, and whatever is left is dropped once the listener is out of reach (walked
+   * off, or the film has cut away). A new announcement replaces the one in progress.
+   */
+  speak(lines: [text: string, lang: string][], wait: number, reach: () => number): void {
+    if (!('speechSynthesis' in window) || !this.enabled || reach() <= 0.001) return;
+    this.cancelSpeech();
+    const job = { reach, timer: 0 };
+    const next = (i: number): void => {
+      if (this.pa !== job) return;
+      const k = reach();
+      if (i >= lines.length || k <= 0.001) {
+        this.pa = null;
+        return;
+      }
+      const [text, lang] = lines[i];
+      const voices = speechSynthesis.getVoices();
+      const v = voices.find((x) => x.lang === lang) ?? voices.find((x) => x.lang.startsWith(lang.slice(0, 2)));
+      if (!v && lang !== 'en-IN') {
+        next(i + 1);
+        return;
+      }
+      const u = new SpeechSynthesisUtterance(text);
+      if (v) u.voice = v;
+      u.lang = lang;
+      u.rate = 0.92;
+      u.pitch = 1.05;
+      u.volume = 0.75 * k;
+      u.onend = u.onerror = () => next(i + 1);
+      speechSynthesis.speak(u);
+    };
+    job.timer = window.setTimeout(() => next(0), wait * 1000);
+    this.pa = job;
+  }
+
+  /** Per frame: drop the announcement once the listener is out of its reach. */
+  updateSpeech(): void {
+    if (this.pa && this.pa.reach() <= 0.001) this.cancelSpeech();
+  }
+
+  cancelSpeech(): void {
+    if (this.pa) window.clearTimeout(this.pa.timer);
+    this.pa = null;
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
   }
 
   /** Exponentially decaying stereo noise impulse (a large, hard-surfaced hall). */
@@ -159,6 +224,7 @@ export class AudioEngine {
   updateListener(camera: THREE.Camera): void {
     const l = this.ctx.listener;
     const p = camera.position;
+    this.listener.copy(p);
     const f = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
     const u = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
     const t = this.ctx.currentTime;

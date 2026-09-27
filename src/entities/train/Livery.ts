@@ -49,7 +49,9 @@ const ROW_H = 256;
 const PURPLE = '#74409c';
 const PURPLE_DARK = '#4a2667';
 const BODY = '#e9e7e1';
-const FC_YELLOW = '#e8b31c';
+/** First class: red-and-white diagonal stripes round the doorways. */
+const FC_RED = '#c3232b';
+const FC_WHITE = '#f3f1ec';
 
 /** z (car-local) → u in [0,1]; y → v within a row. */
 export function liveryU(z: number): number {
@@ -58,7 +60,7 @@ export function liveryU(z: number): number {
 
 /**
  * Livery atlas: 8 rows, each a full car side (20.5 m × 2.53 m).
- * Rows: 0–2 second class (different grime and numbers), 3 first class (yellow door frames),
+ * Rows: 0–2 second class (different grime and numbers), 3 first class (red-and-white striped doorways),
  * 4 ladies coach, 5–7 vinyl ad panels.
  */
 export function buildLiveryAtlas(tf: TextureFactory): THREE.CanvasTexture {
@@ -108,15 +110,38 @@ function paintSide(ctx: Ctx, W: number, H: number, row: number, rng: RNG, tf: Te
   ctx.fillRect(0, yPx(band), W, Math.max(2, 0.025 * k));
   ctx.fillStyle = PURPLE;
   ctx.fillRect(0, yPx(3.46), W, yPx(3.37) - yPx(3.46));
-  // Door surrounds: violet (yellow in first class) frames running up to the cantrail.
+  // Door surrounds: violet frames running up to the cantrail. First class: red-and-white diagonal
+  // stripes down both sides of the doorway and over it, as far as the violet band.
   for (const d of CAR.doors) {
-    const x0 = zPx(d - CAR.doorW / 2 - 0.14);
-    const x1 = zPx(d + CAR.doorW / 2 + 0.14);
-    ctx.fillStyle = firstClass ? FC_YELLOW : PURPLE;
-    ctx.fillRect(x0, yPx(CAR.doorY1 + 0.14), x1 - x0, H - yPx(CAR.doorY1 + 0.14));
     if (firstClass) {
+      const x0 = zPx(d - CAR.doorW / 2 - 0.26);
+      const x1 = zPx(d + CAR.doorW / 2 + 0.26);
+      const y0 = yPx(CAR.doorY1 + 0.14);
+      const y1 = yPx(band);
+      const h = y1 - y0;
+      const sw = 0.1 * k;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x0, y0, x1 - x0, h);
+      ctx.clip();
+      ctx.fillStyle = FC_WHITE;
+      ctx.fillRect(x0, y0, x1 - x0, h);
+      ctx.fillStyle = FC_RED;
+      for (let x = x0 - h; x < x1; x += 2 * sw) {
+        ctx.beginPath();
+        ctx.moveTo(x, y1);
+        ctx.lineTo(x + sw, y1);
+        ctx.lineTo(x + sw + h, y0);
+        ctx.lineTo(x + h, y0);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    } else {
+      const x0 = zPx(d - CAR.doorW / 2 - 0.14);
+      const x1 = zPx(d + CAR.doorW / 2 + 0.14);
       ctx.fillStyle = PURPLE;
-      ctx.fillRect(x0, yPx(band), x1 - x0, H - yPx(band));
+      ctx.fillRect(x0, yPx(CAR.doorY1 + 0.14), x1 - x0, H - yPx(CAR.doorY1 + 0.14));
     }
     // Grab-worn grime beside the doorway.
     for (const sd of [-1, 1]) {

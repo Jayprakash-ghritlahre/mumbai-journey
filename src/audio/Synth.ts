@@ -12,11 +12,14 @@ export function env(g: AudioParam, t: number, attack: number, hold: number, rele
   g.exponentialRampToValueAtTime(0.0001, t + attack + hold + release);
 }
 
-/** Continuous crowd murmur: pink noise through slowly breathing speech-band filters. */
+/**
+ * Continuous crowd murmur: a handful of distant voices (a buzz through two moving vowel formants,
+ * gated into syllables and pauses) over a little low-passed noise for feet and rustle. Voiced and
+ * rolled off above ~1.8 kHz, so it reads as people talking rather than as hiss.
+ */
 export class CrowdBed {
-  private bands: { f: BiquadFilterNode; g: GainNode }[] = [];
+  private voices: { o: OscillatorNode; f1: BiquadFilterNode; f2: BiquadFilterNode; g: GainNode; base: number; next: number }[] = [];
   readonly out: GainNode;
-  private next = 0;
 
   constructor(private readonly a: AudioEngine) {
     const ctx = a.ctx;
@@ -26,33 +29,55 @@ export class CrowdBed {
     const send = ctx.createGain();
     send.gain.value = 0.8;
     this.out.connect(send).connect(a.reverbSend);
-    for (const [freq, q] of [
-      [320, 1.2],
-      [760, 1.6],
-      [1500, 1.8],
-      [2700, 2.2],
-    ]) {
-      const src = a.noiseSource('pink');
-      const f = ctx.createBiquadFilter();
-      f.type = 'bandpass';
-      f.frequency.value = freq;
-      f.Q.value = q;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 1800;
+    lp.Q.value = 0.5;
+    lp.connect(this.out);
+    for (let i = 0; i < 7; i++) {
+      const base = i % 2 ? rnd(185, 240) : rnd(100, 145);
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = base;
+      const f1 = ctx.createBiquadFilter();
+      f1.type = 'bandpass';
+      f1.Q.value = 5;
+      f1.frequency.value = rnd(400, 800);
+      const f2 = ctx.createBiquadFilter();
+      f2.type = 'bandpass';
+      f2.Q.value = 7;
+      f2.frequency.value = rnd(1000, 2000);
       const g = ctx.createGain();
-      g.gain.value = 0.3;
-      src.connect(f).connect(g).connect(this.out);
-      src.start();
-      this.bands.push({ f, g });
+      g.gain.value = 0;
+      o.connect(f1).connect(g);
+      o.connect(f2).connect(g);
+      g.connect(lp);
+      o.start();
+      this.voices.push({ o, f1, f2, g, base, next: 0 });
     }
+    const n = a.noiseSource('pink');
+    const nlp = ctx.createBiquadFilter();
+    nlp.type = 'lowpass';
+    nlp.frequency.value = 450;
+    const ng = ctx.createGain();
+    ng.gain.value = 0.1;
+    n.connect(nlp).connect(ng).connect(this.out);
+    n.start();
   }
 
   update(level: number): void {
     const t = this.a.ctx.currentTime;
     this.out.gain.setTargetAtTime(level, t, 0.8);
-    if (t < this.next) return;
-    this.next = t + rnd(0.15, 0.45);
-    for (const b of this.bands) {
-      b.g.gain.setTargetAtTime(rnd(0.12, 0.5), t, rnd(0.08, 0.3));
-      b.f.frequency.setTargetAtTime(b.f.frequency.value * rnd(0.93, 1.07), t, 0.2);
+    for (const v of this.voices) {
+      if (t < v.next) continue;
+      // A syllable (a new vowel and a little intonation), or a pause.
+      const talk = Math.random() < 0.7;
+      v.next = t + (talk ? rnd(0.09, 0.22) : rnd(0.25, 0.9));
+      v.g.gain.setTargetAtTime(talk ? rnd(0.1, 0.23) : 0, t, 0.035);
+      if (!talk) continue;
+      v.f1.frequency.setTargetAtTime(rnd(350, 850), t, 0.03);
+      v.f2.frequency.setTargetAtTime(rnd(900, 2100), t, 0.03);
+      v.o.frequency.setTargetAtTime(v.base * rnd(0.88, 1.18), t, 0.06);
     }
   }
 }
@@ -126,6 +151,9 @@ export function footstep(a: AudioEngine, pos: THREE.Vector3, loud = 1, hard = tr
   src.onended = () => out.panner.disconnect();
 }
 
+/** How far a train (running, braking, its horn) is heard, in metres ⚠. */
+const TRAIN_RANGE = 350;
+
 /** Positional voice of one EMU rake: inverter whine, wheel rumble, rail clacks, brake squeal. */
 export class TrainVoice {
   private whine: OscillatorNode[] = [];
@@ -192,6 +220,8 @@ export class TrainVoice {
     const accel = (s - this.prevSpeed) / Math.max(dt, 1e-3);
     this.prevSpeed = s;
     this.a.setPos(this.out.panner, pos);
+    // Out of earshot beyond its range (the horn, clacks and hiss go through the same gain).
+    this.out.input.gain.setTargetAtTime(this.a.reach(pos, TRAIN_RANGE), t, 0.25);
     const on = visible ? 1 : 0;
     // VVVF inverter: discrete tones at low speed, then a rising whine.
     const f = s < 3 ? [180, 240, 300][Math.min(2, Math.floor(s))] : 90 + s * 42;
@@ -383,7 +413,7 @@ export function pigeon(a: AudioEngine, pos: THREE.Vector3): void {
   }
 }
 
-/** Street bed: tyre and engine rumble plus a hazy city hum. */
+/** Street bed: tyre and engine rumble plus a hazy city hum (kept low: traffic is mostly rumble). */
 export class StreetBed {
   readonly out: GainNode;
   private hum: GainNode;
@@ -396,23 +426,23 @@ export class StreetBed {
     const b = a.noiseSource('brown');
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass';
-    lp.frequency.value = 500;
+    lp.frequency.value = 420;
     b.connect(lp).connect(this.out);
     b.start();
     const p = a.noiseSource('pink');
-    const bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.frequency.value = 1100;
-    bp.Q.value = 0.6;
+    const soft = ctx.createBiquadFilter();
+    soft.type = 'lowpass';
+    soft.frequency.value = 750;
+    soft.Q.value = 0.5;
     this.hum = ctx.createGain();
-    this.hum.gain.value = 0.25;
-    p.connect(bp).connect(this.hum).connect(this.out);
+    this.hum.gain.value = 0.15;
+    p.connect(soft).connect(this.hum).connect(this.out);
     p.start();
   }
 
   update(level: number, t: number): void {
     this.out.gain.setTargetAtTime(level, t, 1.0);
-    this.hum.gain.setTargetAtTime(0.18 + 0.12 * Math.sin(t * 0.3), t, 0.5);
+    this.hum.gain.setTargetAtTime(0.12 + 0.06 * Math.sin(t * 0.3), t, 0.5);
   }
 }
 
