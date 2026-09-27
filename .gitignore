@@ -1,0 +1,8 @@
+dist/
+.DS_Store
+*.log
+node_modules/
+.run/
+
+# Reference photos stay on this machine (reconstruction only; some are third-party/watermarked).
+assets/
