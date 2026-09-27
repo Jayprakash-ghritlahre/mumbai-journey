@@ -323,15 +323,20 @@ export function buildPlatforms(c: MiraCtx, rail: Railway, hallS: [number, number
       const p = P(s, o, y);
       out.clocks.push({ p, h: H(s) }, { p, h: H(s) + Math.PI });
     }
-    // The old diamond boards on red posts, "Caution 25000 volts" above (photo 12).
+    // The old diamond boards on red posts, "Caution 25000 volts" above (photo 12). Upright: the
+    // atlas face is drawn turned −45°, so the quad turns back −45° to hang as a diamond. Faced both
+    // ways, to the platform it stands on (as in the photo) and across the track; the posts run
+    // between the faces.
     for (const s of [c0 + 30, (c0 + c1) / 2 + 12, c1 - 25])
       for (const f of pf.faces) {
         const o = f.o + f.side * 2.1;
         const m = at(s, o, TOP + 2.0, f.side > 0 ? -Math.PI / 2 : Math.PI / 2);
-        gb.add('signs', signQuad(c.signs.diamond, 1.2, 1.2).rotateZ(Math.PI / 4).translate(0, 0, 0.05).applyMatrix4(m));
-        gb.add('paint', tint(boxGeo(1.22, 1.22, 0.06).rotateZ(Math.PI / 4), 0.6, 0.58, 0.55).applyMatrix4(m));
-        for (const k of [-0.25, 0.25]) gb.add('paint', tint(boxGeo(0.14, 3.4, 0.1).translate(k, -0.3, -0.08), 0.45, 0.14, 0.1).applyMatrix4(m));
-        sign(c, c.signs.caution, 0.75, 0.5, mat4(0, 1.2, 0.02).premultiply(m), { plate: [0.7, 0.7, 0.68], depth: 0.03 });
+        const face = signQuad(c.signs.diamond, 1.2, 1.2).rotateZ(-Math.PI / 4);
+        gb.add('signs', face.clone().translate(0, 0, 0.075).applyMatrix4(m));
+        gb.add('signs', face.rotateY(Math.PI).translate(0, 0, -0.075).applyMatrix4(m));
+        gb.add('paint', tint(boxGeo(1.22, 1.22, 0.12).rotateZ(Math.PI / 4), 0.6, 0.58, 0.55).applyMatrix4(m));
+        for (const k of [-0.25, 0.25]) gb.add('paint', tint(boxGeo(0.14, 3.4, 0.1).translate(k, -0.3, 0), 0.45, 0.14, 0.1).applyMatrix4(m));
+        sign(c, c.signs.caution, 0.75, 0.5, mat4(0, 1.2, 0).premultiply(m), { back: true, plate: [0.7, 0.7, 0.68], depth: 0.12 });
         solid(c, ...xz(P(s, o, 0)), 0.3, 0.3, 0, -1, 3);
       }
 

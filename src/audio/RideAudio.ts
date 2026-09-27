@@ -4,6 +4,11 @@ import { TrainVoice, chime, env } from './Synth';
 import type { HaltStop, Ride } from '../world/journey/Ride';
 import { CAR } from '../entities/train/Livery';
 
+/** How far the station PA carries at Mira Road (from PF 4's speakers) and at the halts (m) ⚠. */
+const STATION_PA_RANGE = 120;
+/** The car's own PA: heard in the car and just outside its doors. */
+const CAR_PA_RANGE = 25;
+
 /**
  * Sounds of riding the local (procedural, like the rest of the soundscape): the car's own rumble,
  * wheel clatter and traction whine under the floor, wind and the open-door roar that grows with
@@ -23,18 +28,24 @@ export class RideAudio {
   private hornDone = new Set<string>();
   private announced = false;
   private lastLeg = -1;
+  /** Mira Road PF 4's PA speakers (world), along the platform where the Churchgate fast stands. */
+  private pf4: THREE.Vector3[] | null = null;
   onSubtitle: (en: string, deva: string) => void = () => {};
 
-  constructor(private readonly a: AudioEngine) {
+  /** `dMira`: path distance of the lead end of the Churchgate fast standing at Mira Road's PF 4. */
+  constructor(
+    private readonly a: AudioEngine,
+    private readonly dMira: number,
+  ) {
     const ctx = a.ctx;
     this.own = new TrainVoice(a);
     this.passing = new TrainVoice(a);
-    // Wind: band-passed noise, brighter and louder with speed.
+    // Wind: low-passed noise, a roar that opens up and grows with speed (not a hiss).
     const n = a.noiseSource('pink');
     this.windFilter = ctx.createBiquadFilter();
-    this.windFilter.type = 'bandpass';
-    this.windFilter.frequency.value = 500;
-    this.windFilter.Q.value = 0.5;
+    this.windFilter.type = 'lowpass';
+    this.windFilter.frequency.value = 300;
+    this.windFilter.Q.value = 0.6;
     this.wind = ctx.createGain();
     this.wind.gain.value = 0;
     n.connect(this.windFilter).connect(this.wind).connect(a.dry);
@@ -82,8 +93,10 @@ export class RideAudio {
     const pos = near ? cam.clone().add(new THREE.Vector3(0, -1.6, 0)) : ride.toWorld(new THREE.Vector3(0, 1, 0));
     this.own.update(dt, pos, v, on);
     const open = st.doors;
-    this.wind.gain.setTargetAtTime(near ? Math.min(0.35, (v / 22) ** 2 * (0.05 + 0.3 * nearDoor * open)) : 0, t, 0.3);
-    this.windFilter.frequency.setTargetAtTime(300 + v * 45, t, 0.3);
+    // In gusts, as the air round the doorway changes.
+    const gust = 0.78 + 0.22 * Math.sin(t * 0.73) * Math.sin(t * 1.91 + 1.2);
+    this.wind.gain.setTargetAtTime(near ? Math.min(0.3, (v / 22) ** 2 * (0.05 + 0.25 * nearDoor * open)) * gust : 0, t, 0.3);
+    this.windFilter.frequency.setTargetAtTime(220 + v * 24, t, 0.3);
     this.cabin.gain.setTargetAtTime(near ? Math.min(0.5, v * 0.022) * (1 - 0.3 * nearDoor) : 0, t, 0.3);
     this.fans.gain.setTargetAtTime(inCar ? 0.018 : 0, t, 0.5);
     // Door leaves sliding.
@@ -104,8 +117,8 @@ export class RideAudio {
     if (leg.key === 'A') {
       once('in', ride.t > 3 && ride.t < 8, 1.4);
       once('out', ride.t > 69 && ride.t < 72, 0.9);
-      // Platform announcement for the incoming train.
-      if (!this.announced && ride.t < 20 && !near) this.announce(cam);
+      // Platform announcement for the incoming train, for those on and around the station.
+      if (on && !this.announced && ride.t < 20 && !near && this.miraReach(ride) > 0.001) this.announce(ride);
     }
     if (leg.handoverAt !== undefined) once('cg', ride.t > leg.handoverAt + 60 && ride.t < leg.handoverAt + 70, 0.8);
     const stop = leg.stop;
@@ -119,7 +132,7 @@ export class RideAudio {
           fn();
         }
       };
-      event('pa-next', tau > -32 && tau < -18, () => this.nextStation(stop));
+      event('pa-next', tau > -32 && tau < -18 && near, () => this.nextStation(stop, ride));
       event('pa-platform', tau > 6 && tau < 14 && inCar, () => this.platformCall(stop, cam, ride));
       event('bell', tau > stop.dwell - 6.5 && tau < stop.dwell - 3, () => this.bell(ride.toWorld(new THREE.Vector3(0, 3, 0))));
     }
@@ -159,35 +172,53 @@ export class RideAudio {
     o.stop(t + 1.6);
   }
 
+  /** How well Mira Road's PA carries to the listener (0 beyond STATION_PA_RANGE of PF 4's speakers). */
+  private miraReach(ride: Ride): number {
+    if (!this.pf4) {
+      // A horn speaker every 30 m down the middle of PF 4, beside where the rake stands.
+      const m = ride.restFrame(this.dMira);
+      this.pf4 = [];
+      for (let z = -240; z <= 30; z += 30) this.pf4.push(new THREE.Vector3(CAR.halfW + 3.5, 4.2, z).applyMatrix4(m));
+    }
+    let k = 0;
+    for (const s of this.pf4) k = Math.max(k, this.a.reach(s, STATION_PA_RANGE));
+    return k;
+  }
+
   /** The PA at Mira Road: chime, then the incoming train in Marathi, Hindi and English. */
-  private announce(cam: THREE.Vector3): void {
+  private announce(ride: Ride): void {
     this.announced = true;
-    const wait = chime(this.a, [cam.clone().add(new THREE.Vector3(6, 5, 0)), cam.clone().add(new THREE.Vector3(-6, 5, 10))]);
+    const cam = this.a.listener;
+    const near = [...this.pf4!].sort((p, q) => p.distanceToSquared(cam) - q.distanceToSquared(cam)).slice(0, 2);
+    const wait = chime(this.a, near);
     const mr = 'प्रवाशांनी कृपया लक्ष द्यावे. फलाट क्रमांक चार वर येणारी गाडी चर्चगेट जलद लोकल आहे.';
     const hi = 'यात्रीगण कृपया ध्यान दें. प्लेटफॉर्म क्रमांक चार पर आने वाली गाड़ी चर्चगेट तेज़ लोकल है.';
     const en = 'Attention please. The train arriving on platform number four is a Churchgate fast local.';
-    this.say(mr, hi, en, wait);
+    this.say(mr, hi, en, wait, () => this.miraReach(ride));
   }
 
   /**
    * The car's own PA coming into a halt ⚠ (the wording of the newer rakes' announcements): next
    * station, and which side the doors open (the platform is on the left, facing Churchgate).
    */
-  private nextStation(stop: HaltStop): void {
+  private nextStation(stop: HaltStop, ride: Ride): void {
     const h = stop.halt;
-    this.say(`पुढील स्टेशन ${h.deva}. दरवाजे डाव्या बाजूला उघडतील.`, `अगला स्टेशन ${h.deva}. दरवाज़े बाईं ओर खुलेंगे.`, `Next station ${h.name}. Doors will open on the left side.`, 0.4);
+    const reach = () => this.a.reach(ride.toWorld(new THREE.Vector3(0, CAR.floorY + 1.2, 0)), CAR_PA_RANGE);
+    this.say(`पुढील स्टेशन ${h.deva}. दरवाजे डाव्या बाजूला उघडतील.`, `अगला स्टेशन ${h.deva}. दरवाज़े बाईं ओर खुलेंगे.`, `Next station ${h.name}. Doors will open on the left side.`, 0.4, reach);
   }
 
   /** The station PA calling the train standing at the platform ⚠ (stops as the ride shows them). */
   private platformCall(stop: HaltStop, cam: THREE.Vector3, ride: Ride): void {
     const out = ride.toWorld(new THREE.Vector3(CAR.halfW + 6, 5, 0));
     const wait = chime(this.a, [out, out.clone().add(cam).multiplyScalar(0.5).setY(5)]);
+    const reach = () => this.a.reach(out, STATION_PA_RANGE);
     if (stop.halt.key === 'BO')
       this.say(
         'फलाट क्रमांक पाच वरील गाडी चर्चगेट जलद लोकल आहे. ही गाडी अंधेरी, वांद्रे, दादर आणि मुंबई सेंट्रल येथे थांबेल.',
         'प्लेटफॉर्म क्रमांक पाँच पर खड़ी गाड़ी चर्चगेट तेज़ लोकल है. यह गाड़ी अंधेरी, बांद्रा, दादर और मुंबई सेंट्रल पर रुकेगी.',
         'The train on platform number five is a Churchgate fast local, halting at Andheri, Bandra, Dadar and Mumbai Central.',
         wait,
+        reach,
       );
     else
       this.say(
@@ -195,6 +226,7 @@ export class RideAudio {
         'प्लेटफॉर्म क्रमांक चार पर खड़ी गाड़ी चर्चगेट तेज़ लोकल है. मध्य रेल की गाड़ियों के लिए कृपया पुल का उपयोग करें.',
         'The train on platform number four is a Churchgate fast local. For Central Railway trains, please use the foot over bridge.',
         wait,
+        reach,
       );
   }
 
@@ -221,27 +253,21 @@ export class RideAudio {
     }
   }
 
-  /** Speaks an announcement in Marathi, Hindi and English after `wait` s (with subtitles). */
-  private say(mr: string, hi: string, en: string, wait: number): void {
+  /**
+   * Speaks an announcement in Marathi, Hindi and English after `wait` s (with subtitles), for as
+   * long as the listener stays within `reach` of where it is made.
+   */
+  private say(mr: string, hi: string, en: string, wait: number, reach: () => number): void {
     this.onSubtitle(en, hi);
-    if (!('speechSynthesis' in window)) return;
-    window.setTimeout(() => {
-      const voices = speechSynthesis.getVoices();
-      for (const [text, lang] of [
+    this.a.speak(
+      [
         [mr, 'mr-IN'],
         [hi, 'hi-IN'],
         [en, 'en-IN'],
-      ]) {
-        const v = voices.find((x) => x.lang === lang) ?? voices.find((x) => x.lang.startsWith(lang.slice(0, 2)));
-        if (!v && lang !== 'en-IN') continue;
-        const u = new SpeechSynthesisUtterance(text);
-        if (v) u.voice = v;
-        u.lang = lang;
-        u.rate = 0.92;
-        u.volume = 0.75;
-        speechSynthesis.speak(u);
-      }
-    }, wait * 1000);
+      ],
+      wait,
+      reach,
+    );
   }
 
   /** A new ride: announcements and horns again. */

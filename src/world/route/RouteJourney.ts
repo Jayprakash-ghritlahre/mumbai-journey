@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { easeInOut, handheld, pose, WalkPath, type Shot } from '../../camera/Cinematic';
+import { ease, easeInOut, handheld, pose, WalkPath, type Shot } from '../../camera/Cinematic';
 import type { Crowd } from '../../entities/crowd/Crowd';
 import type { Route } from './Route';
 import { MD, NP, VN } from './RouteLayout';
@@ -15,7 +15,8 @@ export interface RouteJourneyDeps {
 
 /**
  * Documentary walk from Churchgate's west exit to the Marine Drive sea wall
- * (see CHURCHGATE_TO_MARINE_DRIVE.md §2 for the stages).
+ * (see CHURCHGATE_TO_MARINE_DRIVE.md §2 for the stages), at a brisk pace, almost a jog, with cuts
+ * that skip stretches of IMC and V.N. Road (about two minutes from the exit to the wall).
  */
 export function routeShots(d: RouteJourneyDeps): Shot[] {
   const r = d.route;
@@ -29,10 +30,18 @@ export function routeShots(d: RouteJourneyDeps): Shot[] {
   const sN = MD.sNorthCrossing;
   const setPlayer = (p: THREE.Vector3 | null) => d.crowd.setPlayer(p);
 
-  // Paths.
-  const imcRoad = new WalkPath([E(-27.2, 8.5, EYE), E(-28.6, 16), E(-29.8, 34), E(-30.2, 52), E(-30.6, 64)]);
-  const corner = new WalkPath([E(-30.6, 64), E(-31.2, 76), E(-34.2, 84.5), V(vn.point(sV(-46, 110), oN + 0.6)), V(vn.point(sV(-58, 106), oN)), V(vn.point(sV(-66, 103), oN))]);
-  const vnWalk = new WalkPath([V(vn.point(sV(-72, 101), oN)), V(vn.point(sV(-84, 97), oN + 0.4)), V(vn.point(sV(-96, 93), oN + 0.9)), V(vn.point(sV(-104, 90), oN + 0.6))]);
+  // Paths. Out of the west exit the walk crosses IMC Road with everyone else and goes down its west
+  // footpath (IMC.westWalk), then follows the same line round the corner onto V.N. Road's north
+  // footpath, in a wide arc rather than across the junction.
+  const vnStart = V(vn.point(sV(-72, 101), oN + 0.4));
+  // Off the foot of the steps still heading south (as the exit shot ends), then across on the
+  // diagonal, ahead of the cars parked from z ≈ 22.
+  const imcRoad = new WalkPath([E(-27.2, 8.5, EYE), E(-27.8, 11.2), E(-30.6, 14.2), E(-34.2, 17.5), E(-37.4, 20.6), E(-38.6, 24.5), E(-38.7, 30), E(-37.6, 38)]);
+  // Round the corner through the IMC mouth (clear of the end of the first compound wall at o ≈ 20.75),
+  // then along the middle of the footpath, between the wall and the kerbside trees.
+  const cornerVN = (s: number, o: number) => V(vn.point(s, o));
+  const corner = new WalkPath([E(-36.0, 66), E(-36.2, 74), E(-38.6, 84), cornerVN(369.8, 27.6), cornerVN(368.4, 22.4), cornerVN(366.3, 19.5), cornerVN(362.5, 18.6), cornerVN(sV(-66, 103), 18.4), vnStart]);
+  const vnWalk = new WalkPath([vnStart, V(vn.point(sV(-84, 97), oN + 0.4)), V(vn.point(sV(-96, 93), oN + 0.9)), V(vn.point(sV(-104, 90), oN + 0.6))]);
   const trackA = sV(-122, 84);
   const trackB = sV(-150, 75);
   const vnSun = new WalkPath([V(vn.point(sV(-196, 60), oN)), V(vn.point(sV(-208, 56), oN - 0.4)), V(vn.point(sV(-220, 52), oN - 0.6)), V(vn.point(sV(-232, 49), oN - 0.2))]);
@@ -55,8 +64,11 @@ export function routeShots(d: RouteJourneyDeps): Shot[] {
   // Nariman Point paths (promenade, seaward of the trees).
   const pp = (sa: number, o: number) => V(md.point(sa, o));
   const stroll = new WalkPath([pp(sN - 3.2, MD.promenade + 0.7), pp(sN + 8, -21.5), pp(sN + 50, -21), pp(sN + 100, -20.5), pp(sN + 150, -20.5)]);
-  const almonds = new WalkPath([pp(NP.sJunction + 40, -19), pp(NP.sJunction + 80, -19.3), pp(NP.sJunction + 120, -19.1), pp(NP.sJunction + 160, -19.2)]);
+  // Seaward of the almond trunks (o ≈ −17 … −19.4 here), clear of the trees and the wall's step.
+  const almonds = new WalkPath([pp(NP.sJunction + 40, -21.6), pp(NP.sJunction + 80, -22.2), pp(NP.sJunction + 120, -22.5), pp(NP.sJunction + 160, -22.2)]);
   const toTip = new WalkPath([pp(NP.sEnd - 95, -20.5), pp(NP.sEnd - 60, -21), pp(NP.sEnd - 30, -21.5), pp(NP.sEnd - 7, -22.5)]);
+  /** Setting off from the foot of the steps, then a steady jog (the fraction of the path at t). */
+  const pace = (t: number, a = 0.15) => (t < a ? (t * t) / (2 * a) : t - a / 2) / (1 - a / 2);
   /** Time-lapse into the night, only when the film starts in the evening. */
   const warp = (t: number, a: number, b: number) => {
     const clock = d.clock;
@@ -68,25 +80,27 @@ export function routeShots(d: RouteJourneyDeps): Shot[] {
   const shots: Shot[] = [
     {
       name: 'imc-road',
-      duration: 14,
+      duration: 11,
       fov: 55,
       update: (t, c) => {
-        imcRoad.apply(c.camera, easeInOut(t) * imcRoad.length, c.T, { lookAhead: 7 });
+        // The gaze reaches further ahead as the walk gets going (no jump from the exit shot's).
+        imcRoad.apply(c.camera, pace(t) * imcRoad.length, c.T, { lookAhead: 2 + 7 * THREE.MathUtils.smoothstep(t, 0, 0.5) });
         setPlayer(c.camera.position);
       },
     },
     {
       name: 'vn-corner',
-      duration: 16,
+      duration: 14,
       fov: 55,
       update: (t, c) => {
-        corner.apply(c.camera, t * corner.length, c.T, { lookAhead: 6 });
+        // A long look-ahead: the gaze comes round the corner gradually, as a walker's does.
+        corner.apply(c.camera, t * corner.length, c.T, { lookAhead: 11 });
         setPlayer(c.camera.position);
       },
     },
     {
       name: 'vn-walk',
-      duration: 16,
+      duration: 9,
       fov: 55,
       title: ['Veer Nariman Road', 'वीर नरिमन मार्ग', 'Churchgate → Marine Drive · 400 m'],
       titleAt: 2,
@@ -94,18 +108,18 @@ export function routeShots(d: RouteJourneyDeps): Shot[] {
       update: (t, c) => {
         // A glance to the right at the bus stop and the shopfronts halfway along.
         const glance = Math.sin(Math.min(1, Math.max(0, (t - 0.35) / 0.4)) * Math.PI);
-        vnWalk.apply(c.camera, t * vnWalk.length, c.T, { lookAhead: 7, yawOffset: -0.75 * glance });
+        vnWalk.apply(c.camera, t * vnWalk.length, c.T, { lookAhead: 7, yawOffset: -0.6 * glance });
         setPlayer(c.camera.position);
       },
     },
     {
       name: 'vn-restaurants',
-      duration: 14,
+      duration: 9,
       fov: 42,
       enter: () => setPlayer(null),
       update: (t, c) => {
         // Lateral tracking shot along the restaurant row, from the kerb side.
-        const e = easeInOut(t);
+        const e = ease(t);
         const s = trackA + (trackB - trackA) * e;
         const cam = V(vn.point(s, VN.kerb + 0.9), 1.55);
         const look = V(vn.point(s - 5, VN.footpath + 4), 2.6);
@@ -115,7 +129,7 @@ export function routeShots(d: RouteJourneyDeps): Shot[] {
     },
     {
       name: 'vn-banyans',
-      duration: 16,
+      duration: 11,
       fov: 55,
       update: (t, c) => {
         vnSun.apply(c.camera, t * vnSun.length, c.T, { lookAhead: 8, lookOffset: new THREE.Vector3(0, 0.6 * Math.sin(t * Math.PI), 0) });
@@ -124,7 +138,7 @@ export function routeShots(d: RouteJourneyDeps): Shot[] {
     },
     {
       name: 'opening',
-      duration: 18,
+      duration: 12,
       fov: 50,
       sub: ['The buildings end — the sky opens over the sea', 'समोर समुद्र'],
       subAt: 5,
@@ -140,7 +154,7 @@ export function routeShots(d: RouteJourneyDeps): Shot[] {
     },
     {
       name: 'junction',
-      duration: 15,
+      duration: 11,
       fov: 50,
       title: ['Marine Drive', 'मरीन ड्राइव्ह', "Netaji Subhash Chandra Bose Road · the Queen's Necklace"],
       titleAt: 2.5,
@@ -149,7 +163,7 @@ export function routeShots(d: RouteJourneyDeps): Shot[] {
       update: (t, c) => {
         // At the kerb: look left along Marine Drive to Nariman Point, then right along the curve.
         const cam = V(kerbWait);
-        const e = easeInOut(t);
+        const e = ease(t);
         const a = THREE.MathUtils.lerp(-1.15, 1.05, e);
         const target = cam.clone().add(seaDir(sN, a).multiplyScalar(60));
         target.y = cam.y + 2 + 6 * Math.abs(Math.sin(a)) * 0.3;
@@ -160,7 +174,7 @@ export function routeShots(d: RouteJourneyDeps): Shot[] {
     },
     {
       name: 'signal',
-      duration: 12,
+      duration: 10,
       fov: 48,
       // Only after a seek (or a long stall) is the clock off; then it is realigned here.
       enter: () => {
@@ -178,7 +192,7 @@ export function routeShots(d: RouteJourneyDeps): Shot[] {
     },
     {
       name: 'crossing',
-      duration: 17,
+      duration: 13,
       fov: 55,
       enter: () => {
         // Keep the far kerb and the path to the wall clear of people standing still.
@@ -192,17 +206,17 @@ export function routeShots(d: RouteJourneyDeps): Shot[] {
         }
       },
       update: (t, c) => {
-        crossPath.apply(c.camera, easeInOut(t) * crossPath.length, c.T, { lookAhead: 8 });
+        crossPath.apply(c.camera, ease(t) * crossPath.length, c.T, { lookAhead: 8 });
         setPlayer(c.camera.position);
       },
     },
     {
       name: 'promenade',
-      duration: 9,
+      duration: 7,
       fov: 55,
       enter: () => d.crowd.clearZone(wallSpot[0], wallSpot[1], 2.2),
       update: (t, c) => {
-        toWall.apply(c.camera, easeInOut(t) * toWall.length, c.T, { lookAhead: 5, lookOffset: new THREE.Vector3(0, -0.9 * t, 0) });
+        toWall.apply(c.camera, ease(t) * toWall.length, c.T, { lookAhead: 5, lookOffset: new THREE.Vector3(0, -0.9 * t, 0) });
         setPlayer(c.camera.position);
       },
     },

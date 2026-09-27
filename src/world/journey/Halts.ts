@@ -869,6 +869,8 @@ function dressPlatform(c: Ctx3, pl: Plat, stairs: HaltPlan['stairs']): void {
     for (const f of [-0.8, -0.45, -0.1, 0.25, 0.55, 0.85]) {
       const d = f * 140 + s * 4;
       if (d < pl.a + 5 || d > pl.b - 5 || blocked(d, o + s * 3.2)) continue;
+      // Borivali PF 5 towards the exit: the exit-end board (borivaliMarks) is the one there.
+      if (bo && pl.main && s > 0 && f === 0.85) continue;
       const hung = !bo && covered(d);
       const oo = o + s * (hung ? 1.2 : 3.0);
       const y = hung ? TOP + 3.0 : TOP + 2.2;
@@ -915,7 +917,8 @@ function dressPlatform(c: Ctx3, pl: Plat, stairs: HaltPlan['stairs']): void {
         if (face === null) continue;
         const rot = s < 0 ? -Math.PI / 2 : Math.PI / 2;
         const o = oc + s * 0.2;
-        const q = signQuad(dia, 0.92, 0.92).rotateZ(Math.PI / 4).translate(0, 0, 0.06);
+        // Upright: the atlas face is drawn turned −45°, so the quad turns back −45° to hang as a diamond.
+        const q = signQuad(dia, 0.92, 0.92).rotateZ(-Math.PI / 4).translate(0, 0, 0.06);
         gb.add('hSigns', q.applyMatrix4(mat(d, o, TOP + 2.35, rot)));
         gb.add('paint', tint(boxGeo(1.05, 1.5, 0.05).applyMatrix4(mat(d, o, TOP + 2.2, rot)), 0.42, 0.45, 0.44));
         gb.add('hSigns', signQuad(pr, 0.34, 0.26).translate(0, 0, 0.001).applyMatrix4(mat(d, o, TOP + 1.05, rot)));
@@ -1038,12 +1041,10 @@ function borivaliMarks(c: Ctx3, plats: Plat[]): void {
   const m2 = mat(west.canopies[0].a - 0.2, ow, 5.95, Math.PI).multiply(new THREE.Matrix4().makeRotationX(-0.16));
   gb.add('hSigns', signQuad(fascia, Ww, Ww * (160 / 1024) * 1.25).translate(0, 0, 0.04).applyMatrix4(m2));
   gb.add('corr', tint(boxGeo(Ww + 0.1, Ww * (160 / 1024) * 1.25 + 0.1, 0.05).applyMatrix4(m2), 0.55, 0.42, 0.28));
-  // The exit end: yellow board on white posts facing along the platform, the new deck's pier.
+  // The exit end: one yellow board on white posts facing along the platform on the PF 5 side
+  // (borivali_exit_towards_churchgate.jpg), the new deck's pier.
   const yellow = sign(hk, 'yellow:' + h.key, 512, 256, (x, w, hh) => drawYellow(x, w, hh, h.deva, h.name.toUpperCase()));
-  for (const [rd, o] of [
-    [137, main.o0 + 2.8],
-    [128, main.o1 - 2.6],
-  ] as const) {
+  for (const [rd, o] of [[137, main.o0 + 2.8]] as const) {
     const mb = mat(rd, o, TOP + 2.25, Math.PI);
     gb.add('hSigns', signQuad(yellow, 2.2, 1.1).translate(0, 0, 0.04).applyMatrix4(mb));
     gb.add('hSigns', signQuad(yellow, 2.2, 1.1).translate(0, 0, 0.04).applyMatrix4(mat(rd, o, TOP + 2.25)));
