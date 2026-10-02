@@ -2,10 +2,11 @@
 
 An interactive, browser-based recreation of travelling from Mira Road to Marine Drive:
 
-**NG Galaxy → Mira Road station → Mumbai local → Churchgate → Marine Drive → Nariman Point**
+**Shanti Nagar → by auto → Mira Road station → Mumbai local → Churchgate → Marine Drive → Nariman Point**
 
 **Milestone 1: Churchgate station.** A standalone vertical slice with a cinematic arrival,
-a walkable station and the streets around it, four times of day, and a procedural soundscape.
+a walkable station and the streets around it, five times of day (morning, afternoon, golden hour,
+evening, night), and a procedural soundscape.
 
 **Milestone 2: Churchgate → Marine Drive.** A continuous walk from the station's
 west exit, down IMC Road and along Veer Nariman Road, across Marine Drive to the sea wall.
@@ -29,7 +30,8 @@ Borivali (PF 5) and Dadar (PF 4). You stay aboard and watch it brake along the p
 doors open on a crowd bunched where they stop; people get off and push on, the PA calls the
 train, the guard's bell rings, and the train pulls out. Borivali has its tan name board over the
 canopy end, diamond boards on the columns, red-and-cream paving and the pier at the Churchgate
-end. Dadar has its blue boards, narrow packed islands, Tilak Bridge and the Central Railway
+end. Dadar has its blue boards, its mustard name board over the canopy coming in and the yellow
+board at the far end going out, narrow packed islands, Tilak Bridge and the Central Railway
 beside it. See [HALTS.md](HALTS.md).
 
 **Mira Road station pass (this build, first version).** Mira Road is now an explorable suburban
@@ -39,6 +41,12 @@ the booking hall with its ticket windows, ATVMs and train board, and four number
 live indicators, clocks and benches. The foot-over-bridges, deck and skywalk are all walkable.
 Locals call at PF 1–3 and crowds pour off them; you catch the Churchgate fast on PF 4 by walking
 aboard. See [MIRA_ROAD.md](MIRA_ROAD.md).
+
+**The auto to the station (milestone 5, first version).** Leave your building in Shanti Nagar,
+Sector 2, and wave down a black-and-yellow auto. Ride it as a passenger through the sector's lanes,
+west past Sector 1 and up Poonam Sagar Road, past its median and shops, to the signal at the
+station junction. The auto turns into the approach and drops you at the forecourt; you pay and walk
+into the station. The route follows the real streets (OpenStreetMap). See [AUTO_RIDE.md](AUTO_RIDE.md).
 
 ## Run it
 
@@ -56,6 +64,7 @@ Requires Node 18+ and a WebGL2 browser (Chrome, Edge, Firefox or Safari 16+).
 | | |
 |---|---|
 | **Start journey** | Cinematic (~10 min): Mira Road station, the Churchgate fast coming in, boarding, the ride down the Western line (dissolves skip the hour-long journey), and the arrival on Churchgate's PF 3. You get off, walk down the platform and out of the west exit, then along V.N. Road into the sunset. You wait for the green man, cross Marine Drive and reach the sea wall, then stroll on to Nariman Point as night falls. `Esc` / Skip ends it; the end card offers **Keep walking from here**. |
+| **Auto to the station** | Start inside your society's gate in Shanti Nagar. Walk out to the lane; at the kerb press `E` (or wait) and an auto pulls up beside you. `E` (or step in on the left) to get in. Then you ride: mouse to look round from the seat, `N` to skip to the next stretch. At the forecourt `E` pays ₹26 and you step out to carry on on foot (the Churchgate fast is due in about 2½ minutes). `T` changes the time of day. |
 | **Explore Mira Road** | Start on the station forecourt. Walk up the steps into the booking hall, over the bridges to any platform, along the skywalk or out to the auto stand. The Churchgate fast is due on PF 4 in about 2½ minutes (the boards show it). It waits while you are on PF 4; board it through an open door of the second coach from the south end. Miss it, and the next one comes in 7 minutes. |
 | **Ride the local** | Start on Mira Road's PF 4 as the train comes in; it waits for you. Walk in through an open door of your coach (the second from the south end). Inside: `W A S D` move (the aisle, the vestibules, the open doorway), mouse look, `E` sit on a free seat or stand up, `N` skip to the next stretch. The train stops at Borivali and Dadar (you stay aboard). At Churchgate, walk out of a door onto the platform and carry on on foot. |
 | **Explore Churchgate / Marine Drive / Nariman Point** | Click to capture the mouse. `W A S D` walk, `Shift` run, mouse look, `T` cycle time of day, `F` fly mode (`E`/`Q` up/down), `` ` `` performance stats, `Esc` menu. Touch: left third of the screen moves, the rest looks. The whole route is walkable. |
@@ -102,8 +111,10 @@ Marine Drive.
 **Approximated:**
 - Generic buildings use a facade generator (Art Deco, 1970s grille, Indo-Saracenic stone,
   shopfronts), not per-building detail.
-- Crowds are procedural people with a simple walk cycle.
-- All brands and adverts are fictional.
+- Crowds are procedural people with a simple walk cycle. Build, face, skin, hair and clothes vary
+  per person, and couples, friends and families go about together (CHURCHGATE_TO_MARINE_DRIVE.md §12).
+- All brands and adverts are fictional, except the shops facing Mira Road station on the auto ride's
+  approach, which are the real businesses there (AUTO_RIDE.md).
 - Only the Eros Cinema and the WR HQ dome are hand-modelled landmarks so far.
 
 ## Architecture
@@ -126,12 +137,15 @@ src/
                              MiraRoad (assembles Mira Road), Halts + HaltLife (the Borivali and
                              Dadar stops and their crowds), Ride (schedule, rake, car sway, doors,
                              passengers, stops, Churchgate hand-over), RideJourney (the film's ride shots)
-  world/miraroad/            Mira Road station: front and booking hall, platforms, decks and stairs,
+  world/miraroad/            AutoRoute (the auto's lane path on OSM ways), MiraFirstMile + MiraProps (the
+                             auto ride's streets: lanes, gates, median, signal, stalls, its traffic and people);
+                             Mira Road station: front and booking hall, platforms, decks and stairs,
                              streets and forecourt, signs, LED boards and timetable, vehicles,
                              and the life (locals calling, crowds, traffic); own collision + light map
   world/route/               Churchgate → Marine Drive: RouteLayout (fitted road geometry), VNRoad,
                              MarineDrive (promenade, sea wall, tetrapods), Ocean, Skyline, Signals,
                              DecoDressing (Art Deco corridor, Soona Mahal), props, RouteJourney (film)
+  entities/auto/             HeroAuto: the auto you ride, inside and out, its driver and fare meter
   entities/train/            EMU geometry + livery, HeroCar (the detailed coach you ride), Timetable,
                              TrainSystem (arrive → dwell → depart, free trains, the approach curve)
   entities/crowd/            GPU-skinned instanced people, steering, boarding/alighting
@@ -145,8 +159,8 @@ tools/
   build-skyline-geo.mjs      builds land polygons + far buildings → public/data/back-bay.geo.json
   fetch-osm-railway.mjs      downloads the Western Railway between Churchgate and Mira Road
   build-railway.mjs          one smoothed main-line centre line + stations → public/data/western-line.json
-  fetch-osm-miraroad.mjs     downloads Mira Road station and its surroundings
-  build-miraroad.mjs         trims it to public/data/mira-road.osm.json
+  fetch-osm-miraroad.mjs     downloads Mira Road station and its surroundings, and Shanti Nagar / Poonam Sagar Road
+  build-miraroad.mjs         trims both to public/data/mira-road.osm.json (the second appended, marked ext)
   route-map.mjs              renders docs/route-map.png (the route over OSM data)
   screenshot.mjs             headless-Chrome renderer used for visual QA
 ```
@@ -191,23 +205,27 @@ Everything is synthesised with Web Audio, with no recordings:
 - **People and street:** crowd babble, footsteps, car horns, crows, pigeons in the roof.
 - **Station:** a PA chime, then the departure announcement in Marathi, Hindi and English
   through the browser's speech synthesis, shown as subtitles. Speech is only heard where
-  the OS has those voices installed.
+  the browser has those voices (Chrome uses Google's online voices); when the browser's speech
+  fails, a notice says so once and the captions carry on.
 - **The ride:** the car's rumble, wheel clatter and traction whine under the floor, wind that
   grows with speed near the open doorway, ceiling fans, door leaves sliding, horns, locals passing
   on the next line, and Mira Road's announcement of the incoming Churchgate fast.
 
 ## Developer URL parameters
 
-`?mode=explore|cinematic` · `time=morning|afternoon|golden|night|<hour>` · `q=low|medium|high` ·
+`?mode=explore|cinematic|mira|auto` · `time=morning|afternoon|golden|evening|night|<hour>` · `q=low|medium|high` ·
 `cam=x,y,z,yawDeg,pitchDeg` · `hud=0` · `freeze=1` · `stats=1` · `sound=1` · `ao=0`
 
 `node tools/screenshot.mjs --query "mode=explore&hud=0" --shots shots.json --outdir out/` renders
 a list of camera positions through the dev server. `window.__mj.seek(seconds)` scrubs the cinematic.
+`window.__mj.lineup(n)` stands n women drawn as on the promenade in a row in front of the camera
+(`lineup(n, 'all')` for everyone). `window.__mj.groups()` lists the couples, friends and families
+and where they are.
 
 ## Next milestones
 
 1. Your feedback on Mira Road (MIRA_ROAD.md) and the Borivali and Dadar stops (HALTS.md), then polish of the ride (LOCAL_TRAIN.md §8).
-2. NG Galaxy and the walk to Mira Road station.
+2. Your feedback on the auto ride (AUTO_RIDE.md); the auto ride in the film.
 3. Monsoon weather.
 
 ## Licences

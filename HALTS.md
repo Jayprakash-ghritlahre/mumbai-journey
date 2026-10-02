@@ -29,6 +29,8 @@ Facts marked **⚠** are estimates or general knowledge, not taken from a source
 | `assets/Borivali_platformboard.jpg` | The WR diamond board on a column: a white diamond with a red ring, a navy bar with a white "बोरीवली" on it, "बोरीवली" above and "BORIVALI" below, on a grey backing plate. The pillar number is painted beneath ("31"). Also the red-brown fences between the tracks. |
 | `assets/borivali_exit_towards_churchgate.jpg` | The Churchgate end: the yellow "बोरीवली / बोरीवली BORIVALI" board on white posts, the red-and-cream paving, the big concrete pier, the barrel-roofed canopy with its orange underside, and the platform tapering off. |
 | `assets/dadar.jpeg` | Dadar: the blue board with a white border and cream "दादर / DADAR" lettering hung from the canopy trusses, the old steel-truss canopy with its white valance, a green train indicator, and the packed, narrow platform. |
+| `assets/dadar_entry.png` | Coming into Dadar: the mustard corrugated board over the canopy end reading "दादर  DADAR  दादर", and in front of it the yellow "दादर / दादर DADAR" board in a dark-brown frame on yellow posts. |
+| `assets/dadar_exit.jpg` | Leaving Dadar: the rounded yellow "दादर / दादर DADAR" board on white posts with black feet, where the platform runs out into the open. |
 | Western Railway, via [Borivali railway station (Wikipedia)](https://en.wikipedia.org/wiki/Borivali_railway_station) and [Mumbai Wiki](https://mumbai.fandom.com/wiki/Borivali_Railway_Station) | Borivali has 10 platforms, numbered west to east. **PF 5 takes the Churchgate-bound fast locals** (as you asked). |
 | [Dadar railway station (Wikipedia)](https://en.wikipedia.org/wiki/Dadar_railway_station), [Free Press Journal on Dadar PF 4](https://www.freepressjournal.in/mumbai/dadar-station-platform-4-to-be-extended-for-15-coach-fast-locals-under-western-railway-expansion-plan) | Dadar has 7 Western and 7 Central platforms. Fast locals use PF 4, and 15-car fasts use PF 5 for now. The ride stops at **PF 4**. |
 | OpenStreetMap, `public/data/western-line.json` | Where the stations are on the real line: Borivali at 34.07 km from Churchgate, Dadar at 10.27 km. |
@@ -119,6 +121,11 @@ for:
   valance, and tube lights and fans. The Central side's posts are painted red-oxide ⚠.
 - **Boards:** blue "दादर / DADAR" boards hung from the trusses facing the tracks, and a blue
   "मध्य रेल्वे · CENTRAL RAILWAY" board on the Central platform.
+- **Coming in and going out, as at Borivali:** the mustard "दादर DADAR दादर" board over the north
+  end of the PF 4/5 canopy, with the framed board on yellow posts in front of it on the PF 4 side
+  (dadar_entry.png). Past the south end of the canopy is the rounded yellow board on black-footed
+  white posts (dadar_exit.jpg). Both boards on posts face along the line, towards the train
+  running at them, and read on both sides.
 - **Bridges:**
   - three foot-over-bridges with stairs onto every island, landing mid-platform (the Dadar
     squeeze);
@@ -170,6 +177,7 @@ for:
 |---|---|
 | `src/world/journey/Railway.ts` | `halts`: the two stations, and the track layout that spreads round the islands. Lines 5–7 are the extra roads, which exist only at the halts. |
 | `src/world/journey/Halts.ts` | Builds a station: platforms, canopies, bridges and stairs, signs, fences, buffer stops, the station's own marks, the surroundings, and the live indicators. |
+| `src/world/journey/StationBoards.ts` | The name boards seen coming in and going out: the corrugated fascia over a canopy end and the board on posts, drawn in each station's colours. Borivali, Dadar and Mira Road use the same boards. |
 | `src/world/journey/HaltLife.ts` | The crowd, as a function of time since the stop: waiting, getting off, pushing on, pacing, going up to the bridges. |
 | `src/world/journey/Ride.ts` | The two stopping legs (`BO` and `DA`): motion, doors and LED. Also who gets off and on the ridden car, and the other trains at the platforms. |
 | `src/world/journey/Journey.ts` | The `BO` and `DA` stretches, each built with its station. |

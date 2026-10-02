@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RNG } from '../../core/Random';
 import { Riders } from '../../entities/crowd/Riders';
-import { makeLook, type Look } from '../../entities/crowd/Crowd';
+import { makeLook, type Look } from '../../entities/crowd/Looks';
 import type { AmbientVolume } from '../../gfx/AmbientVolume';
 import { CAR } from '../../entities/train/Livery';
 import type { Halt } from './Railway';

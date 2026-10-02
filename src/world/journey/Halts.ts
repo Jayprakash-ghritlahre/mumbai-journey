@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RNG } from '../../core/Random';
 import { GeoBuilder, boxGeo, rodGeo, tint } from '../../gfx/GeoBuilder';
 import { makeCanvas, type Ctx, type TextureFactory } from '../../gfx/TextureFactory';
-import { DEVA, LATIN, SignAtlas, drawDirectionSign, drawPlatformNumber, fitFont, signQuad, type AtlasRect } from '../../gfx/Signage';
+import { DEVA, LATIN, SignAtlas, drawDirectionSign, drawPlatformNumber, signQuad, type AtlasRect } from '../../gfx/Signage';
 import { BuildingBatch } from '../city/BuildingGen';
 import { FACADE } from '../../gfx/FacadeTextures';
 import { AmbientVolume } from '../../gfx/AmbientVolume';
@@ -10,6 +10,7 @@ import { drawCaution } from '../miraroad/MiraSigns';
 import type { CorridorKit } from './Corridor';
 import type { Halt, Railway } from './Railway';
 import { HaltLife, type HaltPlan } from './HaltLife';
+import { centred, drawFascia, drawNameBoard, postBoard, weather, type BoardStyle, type PostBoard } from './StationBoards';
 
 /**
  * Borivali and Dadar, the two stops the Churchgate fast makes on the way (HALTS.md). They are
@@ -82,7 +83,8 @@ function haltKit(kit: CorridorKit): HaltKit {
     mats.add(name, mat, macro);
     return mat;
   };
-  const atlas = new SignAtlas(tf, 2048, 1024);
+  // Both stations' signs: name boards coming in and going out, diamonds, pillars, ads, stalls.
+  const atlas = new SignAtlas(tf, 2048, 1536);
   const M = mats.m;
   const m: Record<string, THREE.Material> = {
     ...kit.m,
@@ -171,46 +173,6 @@ function corrugated(tf: TextureFactory): THREE.Texture {
   });
 }
 
-function centred(c: Ctx, text: string, x: number, y: number, weight: string, family: string, max: number, width: number): void {
-  c.font = `${weight} ${fitFont(c, text, weight, family, max, width)}px ${family}`;
-  c.textAlign = 'center';
-  c.textBaseline = 'middle';
-  c.fillText(text, x, y);
-}
-
-function weather(c: Ctx, w: number, h: number, seed: number, amount = 1): void {
-  const rng = new RNG(seed);
-  for (let i = 0; i < 10 * amount; i++) {
-    const x = rng.range(0, w);
-    const len = rng.range(h * 0.2, h * 0.9);
-    const g = c.createLinearGradient(0, 0, 0, len);
-    g.addColorStop(0, `rgba(55,40,25,${0.16 * amount})`);
-    g.addColorStop(1, 'rgba(55,40,25,0)');
-    c.fillStyle = g;
-    c.fillRect(x, 0, rng.range(2, 10), len);
-  }
-}
-
-/** The tan corrugated board over the north end of Borivali's PF 5/6 canopy. */
-function drawFascia(c: Ctx, w: number, h: number, deva: string, en: string): void {
-  c.fillStyle = '#b8935f';
-  c.fillRect(0, 0, w, h);
-  const n = 64;
-  for (let i = 0; i < n; i++) {
-    const g = c.createLinearGradient((i * w) / n, 0, ((i + 1) * w) / n, 0);
-    g.addColorStop(0, 'rgba(70,45,15,0.28)');
-    g.addColorStop(0.5, 'rgba(255,235,190,0.2)');
-    g.addColorStop(1, 'rgba(70,45,15,0.28)');
-    c.fillStyle = g;
-    c.fillRect((i * w) / n, 0, w / n + 1, h);
-  }
-  c.fillStyle = '#17120c';
-  centred(c, deva, w * 0.2, h * 0.47, '700', DEVA, h * 0.62, w * 0.3);
-  centred(c, deva, w * 0.8, h * 0.47, '700', DEVA, h * 0.62, w * 0.3);
-  centred(c, en, w * 0.5, h * 0.6, '700', LATIN, h * 0.34, w * 0.26);
-  weather(c, w, h, 41, 1.3);
-}
-
 /** The WR diamond (Borivali_platformboard.jpg), drawn turned −45° so the quad hangs as a diamond. */
 function drawDiamond(c: Ctx, w: number, h: number, deva: string, en: string): void {
   c.fillStyle = '#ecebe6';
@@ -246,19 +208,6 @@ function drawBlueBoard(c: Ctx, w: number, h: number, deva: string, en: string): 
   centred(c, deva, w / 2, h * 0.33, '700', DEVA, h * 0.36, w * 0.8);
   centred(c, en, w / 2, h * 0.72, '700', LATIN, h * 0.34, w * 0.8);
   weather(c, w, h, 47, 0.5);
-}
-
-/** Yellow station board: Marathi / Hindi above, English below (the exit-end board). */
-function drawYellow(c: Ctx, w: number, h: number, deva: string, en: string): void {
-  c.fillStyle = '#f0c21a';
-  c.fillRect(0, 0, w, h);
-  c.strokeStyle = '#151515';
-  c.lineWidth = h * 0.035;
-  c.strokeRect(h * 0.04, h * 0.04, w - h * 0.08, h * 0.92);
-  c.fillStyle = '#151515';
-  centred(c, deva, w / 2, h * 0.3, '700', DEVA, h * 0.34, w * 0.8);
-  centred(c, `${deva}  ${en}`, w / 2, h * 0.72, '700', DEVA, h * 0.3, w * 0.9);
-  weather(c, w, h, 53, 0.6);
 }
 
 function drawPillar(c: Ctx, w: number, h: number, n: number): void {
@@ -1021,44 +970,75 @@ function buildTrackside(c: Ctx3, rail: Railway, plats: Plat[]): void {
 
 const LINE_HALF = (rail: Railway, h: Halt, a: number, b: number) => -(rail.lineOffset(a, h.d)! + rail.lineOffset(b, h.d)!) / 2;
 
+/**
+ * The corrugated name board over the north end of a canopy, leaning back a little, facing the
+ * trains coming in from Mira Road (width W; its lower edge just under the eaves at yE).
+ */
+function canopyFascia(c: Ctx3, pl: Plat, W: number, yE: number, tone: 'tan' | 'mustard'): void {
+  const { gb, mat, hk, h } = c;
+  const oc = (pl.o0 + pl.o1) / 2;
+  const a = pl.canopies[0].a - 0.2;
+  const rect = sign(hk, 'fascia:' + h.key, 1024, 160, (x, w, hh) => drawFascia(x, w, hh, h.deva, h.name.toUpperCase(), tone));
+  const H = W * (160 / 1024) * 1.25;
+  const y = yE - 0.16 + H / 2;
+  const m = mat(a, oc, y, Math.PI).multiply(new THREE.Matrix4().makeRotationX(-0.16));
+  gb.add('hSigns', signQuad(rect, W, H).translate(0, 0, 0.04).applyMatrix4(m));
+  const back: RGB = tone === 'tan' ? [0.55, 0.42, 0.28] : [0.62, 0.44, 0.14];
+  gb.add('corr', tint(boxGeo(W + 0.1, H + 0.1, 0.05).applyMatrix4(m), back[0], back[1], back[2]));
+  for (const s of [-1, 1]) gb.add('steel', beam(c.P(a, oc + s * (W / 2 - 0.5), y - 0.85), c.P(a + 1.4, oc + s * (W / 2 - 0.5), y + 0.65), 0.1, 0.1));
+}
+
+/** A name board on posts on the main island, facing along the line towards the ride's train. */
+function endBoard(c: Ctx3, rd: number, o: number, style: BoardStyle, spec: PostBoard, size: [number, number]): void {
+  const { hk, h } = c;
+  const rect = sign(hk, `board:${h.key}:${style}`, size[0], size[1], (x, w, hh) => drawNameBoard(x, w, hh, h.deva, h.name.toUpperCase(), style));
+  postBoard(c.gb, { face: 'hSigns', paint: 'paint', post: 'whiteEnamel' }, rect, c.mat(rd, o, TOP, Math.PI), spec);
+}
+
 /** Borivali's own marks: the name board over the canopy, the exit-end board, the pier. */
 function borivaliMarks(c: Ctx3, plats: Plat[]): void {
-  const { gb, mat, hk, h } = c;
+  const { gb, mat } = c;
   const main = plats.find((p) => p.main)!;
   const oc = (main.o0 + main.o1) / 2;
-  const cn = main.canopies[0];
-  const fascia = sign(hk, 'fascia', 1024, 160, (x, w, hh) => drawFascia(x, w, hh, h.deva, h.name.toUpperCase()));
-  const W = main.o1 - main.o0 + 0.4;
-  // Leaning back a little over the canopy's north end, facing the trains from Mira Road.
-  const m = mat(cn.a - 0.2, oc, 5.95, Math.PI).multiply(new THREE.Matrix4().makeRotationX(-0.16));
-  gb.add('hSigns', signQuad(fascia, W, W * (160 / 1024) * 1.25).translate(0, 0, 0.04).applyMatrix4(m));
-  gb.add('corr', tint(boxGeo(W + 0.1, W * (160 / 1024) * 1.25 + 0.1, 0.05).applyMatrix4(m), 0.55, 0.42, 0.28));
-  for (const s of [-1, 1]) gb.add('steel', beam(c.P(cn.a - 0.2, oc + s * (W / 2 - 0.5), 5.1), c.P(cn.a + 1.2, oc + s * (W / 2 - 0.5), 6.6), 0.1, 0.1));
-  // The same board over the north end of PF 3/4's canopy.
-  const west = plats[1];
-  const ow = (west.o0 + west.o1) / 2;
-  const Ww = west.o1 - west.o0;
-  const m2 = mat(west.canopies[0].a - 0.2, ow, 5.95, Math.PI).multiply(new THREE.Matrix4().makeRotationX(-0.16));
-  gb.add('hSigns', signQuad(fascia, Ww, Ww * (160 / 1024) * 1.25).translate(0, 0, 0.04).applyMatrix4(m2));
-  gb.add('corr', tint(boxGeo(Ww + 0.1, Ww * (160 / 1024) * 1.25 + 0.1, 0.05).applyMatrix4(m2), 0.55, 0.42, 0.28));
-  // The exit end: one yellow board on white posts facing along the platform on the PF 5 side
+  // Over the north end of the PF 5/6 canopy, and the same board over PF 3/4's.
+  canopyFascia(c, main, main.o1 - main.o0 + 0.4, 5.0, 'tan');
+  canopyFascia(c, plats[1], plats[1].o1 - plats[1].o0, 5.0, 'tan');
+  // The exit end: one yellow board on white posts on the PF 5 side
   // (borivali_exit_towards_churchgate.jpg), the new deck's pier.
-  const yellow = sign(hk, 'yellow:' + h.key, 512, 256, (x, w, hh) => drawYellow(x, w, hh, h.deva, h.name.toUpperCase()));
-  for (const [rd, o] of [[137, main.o0 + 2.8]] as const) {
-    const mb = mat(rd, o, TOP + 2.25, Math.PI);
-    gb.add('hSigns', signQuad(yellow, 2.2, 1.1).translate(0, 0, 0.04).applyMatrix4(mb));
-    gb.add('hSigns', signQuad(yellow, 2.2, 1.1).translate(0, 0, 0.04).applyMatrix4(mat(rd, o, TOP + 2.25)));
-    gb.add('paint', tint(boxGeo(2.3, 1.2, 0.06).applyMatrix4(mb), 0.2, 0.2, 0.2));
-    for (const k of [-0.95, 0.95]) gb.add('whiteEnamel', rodGeo(c.P(rd, o + k, TOP), c.P(rd, o + k, TOP + 2.85), 0.06, 8));
-  }
+  endBoard(c, 137, main.o0 + 2.8, 'borivali', { w: 2.2, h: 1.1, y: 2.25, posts: { gap: 1.9, r: 0.06, colour: [0.92, 0.92, 0.9], top: 2.85 }, plate: [0.2, 0.2, 0.2] }, [512, 256]);
   gb.add('concrete', boxGeo(2.1, 9.6, 2.1).applyMatrix4(mat(145, oc + 1.2, TOP + 4.8)));
   gb.add('concrete', boxGeo(4.6, 1.5, 3.2).applyMatrix4(mat(145, oc + 1.2, TOP + 10.3)));
   gb.add('paint', tint(boxGeo(2.4, 0.3, 2.4).applyMatrix4(mat(145, oc + 1.2, TOP + 0.15)), 0.55, 0.53, 0.5));
 }
 
-/** Dadar's own marks: Tilak Bridge is built with the corridor; the flower market on the west side. */
+/**
+ * Dadar's own marks: the name boards coming in and going out, and the flower market on the west
+ * side (Tilak Bridge is built with the corridor).
+ */
 function dadarMarks(c: Ctx3, rail: Railway, plats: Plat[]): void {
   const { gb, P, mat, rng, h } = c;
+  const main = plats.find((p) => p.main)!;
+  // Coming in, past Tilak Bridge (dadar_entry.png): the mustard fascia over the north end of the
+  // PF 4/5 canopy, and in front of it a framed board on yellow posts on the PF 4 side.
+  canopyFascia(c, main, main.o1 - main.o0 + 0.4, 4.55, 'mustard');
+  endBoard(
+    c,
+    main.canopies[0].a - 3.2,
+    main.o0 + 2.5,
+    'dadarEntry',
+    { w: 2.3, h: 1.25, y: 2.1, posts: { gap: 2.56, r: 0.055, colour: [0.86, 0.6, 0.1], square: true, top: 2.8 }, plate: [0.3, 0.17, 0.08], frame: { colour: [0.3, 0.17, 0.08], t: 0.07 } },
+    [512, 280],
+  );
+  // Going out (dadar_exit.jpg): the rounded yellow board on black-footed white posts, just past
+  // the end of the canopy where the island runs out into the open.
+  endBoard(
+    c,
+    main.canopies[0].b + 3.5,
+    main.o0 + 2.3,
+    'dadarExit',
+    { w: 2.1, h: 1.0, y: 2.2, round: 0.14, posts: { gap: 1.5, r: 0.045, colour: [0.92, 0.92, 0.9], top: 2.4, foot: { colour: [0.06, 0.06, 0.06], h: 0.55 } }, plate: [0.62, 0.43, 0.06] },
+    [512, 244],
+  );
   const west = rail.bounds(h.d)[0];
   // Flower market stalls beyond the west wall ⚠ (placed from general knowledge).
   for (let d = -150; d < 90; d += rng.range(3.2, 4.4)) {

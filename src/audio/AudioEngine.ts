@@ -17,8 +17,14 @@ export class AudioEngine {
   private targetVolume = 0.9;
   /** Where the listener is (the camera, as of the last `updateListener`). */
   readonly listener = new THREE.Vector3();
-  /** The PA announcement being spoken, and how well it carries to the listener now. */
-  private pa: { reach: () => number; timer: number } | null = null;
+  /**
+   * The PA announcement being spoken: how well it carries to the listener now, its timers, and its
+   * utterances (held: Chrome can drop the events of an utterance nothing else references).
+   */
+  private pa: { reach: () => number; timer: number; watch: number; said: SpeechSynthesisUtterance[] } | null = null;
+  /** Called once, the first time the browser's speech fails (why: its error, or 'stalled'). */
+  onSpeechError: (why: string) => void = () => {};
+  private speechFailed = false;
 
   constructor() {
     const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -87,9 +93,10 @@ export class AudioEngine {
   speak(lines: [text: string, lang: string][], wait: number, reach: () => number): void {
     if (!('speechSynthesis' in window) || !this.enabled || reach() <= 0.001) return;
     this.cancelSpeech();
-    const job = { reach, timer: 0 };
+    const job = { reach, timer: 0, watch: 0, said: [] as SpeechSynthesisUtterance[] };
     const next = (i: number): void => {
       if (this.pa !== job) return;
+      window.clearTimeout(job.watch);
       const k = reach();
       if (i >= lines.length || k <= 0.001) {
         this.pa = null;
@@ -103,13 +110,26 @@ export class AudioEngine {
         return;
       }
       const u = new SpeechSynthesisUtterance(text);
+      job.said.push(u);
       if (v) u.voice = v;
       u.lang = lang;
       u.rate = 0.92;
       u.pitch = 1.05;
       u.volume = 0.75 * k;
-      u.onend = u.onerror = () => next(i + 1);
+      u.onstart = () => window.clearTimeout(job.watch);
+      u.onend = () => next(i + 1);
+      u.onerror = (e) => {
+        if (e.error !== 'interrupted' && e.error !== 'canceled') this.speechError(e.error);
+        next(i + 1);
+      };
       speechSynthesis.speak(u);
+      // Google's voices are fetched over the network and can take seconds to start; one that never
+      // starts has left the browser's speech stuck (cancel() frees it for the next announcement).
+      job.watch = window.setTimeout(() => {
+        if (this.pa !== job) return;
+        this.speechError('stalled');
+        this.cancelSpeech();
+      }, 20000);
     };
     job.timer = window.setTimeout(() => next(0), wait * 1000);
     this.pa = job;
@@ -121,9 +141,19 @@ export class AudioEngine {
   }
 
   cancelSpeech(): void {
-    if (this.pa) window.clearTimeout(this.pa.timer);
+    if (this.pa) {
+      window.clearTimeout(this.pa.timer);
+      window.clearTimeout(this.pa.watch);
+    }
     this.pa = null;
     if ('speechSynthesis' in window) speechSynthesis.cancel();
+  }
+
+  private speechError(why: string): void {
+    console.warn(`PA announcement: the browser's speech failed (${why}); voices: ${speechSynthesis.getVoices().length}`);
+    if (this.speechFailed) return;
+    this.speechFailed = true;
+    this.onSpeechError(why);
   }
 
   /** Exponentially decaying stereo noise impulse (a large, hard-surfaced hall). */

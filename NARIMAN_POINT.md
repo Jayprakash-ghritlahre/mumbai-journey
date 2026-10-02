@@ -57,7 +57,7 @@ About 1.05 km from the junction crossing to the tip, 13–15 minutes at a stroll
   - Same pavers and white band as milestone 2.
   - Widened to the road with a tree strip: almond trees every 11–14 m, and U-hoops along the kerb.
   - Twin-arm lamps continue.
-  - Benches **⚠**.
+  - No benches (there are none on this stretch); people sit on the sea wall.
 - **Sea wall and tetrapods** continue unchanged to the tip. There the parapet follows the OSM coastline round the corner.
 - **People:**
   - Evening walkers, joggers and couples.
@@ -71,7 +71,7 @@ About 1.05 km from the junction crossing to the tip, 13–15 minutes at a stroll
    - the Air India junction
    - the narrower road
    - the widened promenade with almond trees
-   - lamps, benches and tetrapods
+   - lamps and tetrapods
    - the tip platform
    - the landmark buildings
    - a second signal controller for the junction
@@ -85,7 +85,7 @@ About 1.05 km from the junction crossing to the tip, 13–15 minutes at a stroll
 - **Tower heights** come from OSM building parts. For Air-India, OSM's 105 m differs from the commonly quoted 91 m. **⚠**
 - **Rooftop signage in 2026:** unknown. The Air-India roof is left unbranded; the Trident keeps its name letters. **⚠**
 - **Tata Theatre roof** form and colour are simplified. **⚠**
-- **Benches, vendors and the exact tree spacing** on the southern promenade are estimates from photos. **⚠**
+- **Vendors and the exact tree spacing** on the southern promenade are estimates from photos. **⚠**
 - **Junction layout** (lane arrows, the exact zebra positions and the signal phasing) is plausible, not surveyed. **⚠**
 - **The tip platform's shape** follows the OSM coastline. The real parapet line may differ by a few metres. **⚠**
 
@@ -96,7 +96,7 @@ About 1.05 km from the junction crossing to the tip, 13–15 minutes at a stroll
 | **Geometry** | The Marine Drive centre line now runs along the last straight stretch of coast to ~45 m short of the tip. The sea wall replaces the land edge all the way. `src/world/route/NarimanPoint.ts` takes over from the end of the detailed Marine Drive stretch (s ≈ 3153). |
 | **Air India junction** | Marine Drive's 4+4 lanes end in a box junction with zebras across Marine Drive and Sir Dorab Tata Road, stop lines, and the Madame Cama Road mouth. A second signal controller (Marine Drive / Madame Cama Road / green man) drives heads on poles and a mast arm. Traffic obeys it (a 100 s run: no red-light running). |
 | **Sir Dorab Tata Road** | Two 2-lane carriageways on the OSM centre lines, a kerbed planted median with twin-arm lamps, a sea-side parking lane with taxis, a 5 m land-side footpath with palms and almonds, and a turning loop at the NCPA. |
-| **Promenade** | Widens to the road edge. Indian almond trees (a new tree type with tiered branches) and U-hoops line the kerb; benches sit between the trees. Twin-arm lights run along the road edge. The pavers, white band, step, sea wall and modelled tetrapods continue to the tip. A paved plaza and an end parapet close the tip. |
+| **Promenade** | Widens to the road edge. Indian almond trees (a new tree type with tiered branches) and U-hoops line the kerb (no benches). Twin-arm lights run along the road edge. The pavers, white band, step, sea wall and modelled tetrapods continue to the tip. A paved plaza and an end parapet close the tip. |
 | **Landmarks** | Built on the OSM footprints and part heights:<br>• **Air-India:** white slab with rows of small windows, a recessed glazed top floor, an overhanging roof, and a rounded podium with a roof garden and a fictional billboard.<br>• **Express Towers:** dark grid.<br>• **Trident:** cream slab with red name letters.<br>• **The Oberoi.**<br>• **NCPA:** Tata Theatre and Jamshed Bhabha Theatre with a colonnade.<br>Their windows light up after dusk. |
 | **City** | The generator now also builds the Nariman Point area: buildings, streets, trees, lamps and collision. The far skyline no longer draws it. The ambient-light map (2048², ≈0.8 m cells) and the walk surface cover it. |
 | **People** | Walkers on the southern promenade, sitters along the whole wall (busier towards the tip), a standing crowd at the tip, and a traffic policeman at the promenade chowki. |

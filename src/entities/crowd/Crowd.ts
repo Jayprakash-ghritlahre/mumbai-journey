@@ -2,27 +2,13 @@ import * as THREE from 'three';
 import { RNG } from '../../core/Random';
 import type { AmbientVolume } from '../../gfx/AmbientVolume';
 import { buildHuman, type Variant } from './HumanGeometry';
-import { CROWD_ATTRS, createCrowdDepthMaterial, createCrowdMaterial } from './CrowdMaterial';
+import { CROWD_ATTRS, createCrowdDepthMaterial, createCrowdMaterial, writeLook } from './CrowdMaterial';
+import { POSE, child, jogger, makeLook, makeLookOf, man, policeLook, woman, youngMan, youngWoman, type Look } from './Looks';
 import { CAR } from '../train/Livery';
 import { TrainSystem, type TrainView } from '../train/TrainSystem';
 import { CONCOURSE, EDGE, PLATFORMS, TRACKS, Y } from '../../world/churchgate/Layout';
 
 type State = 'walk' | 'idle' | 'sit' | 'gone';
-
-export interface Look {
-  /** 0 man, 1 woman (salwar kurta), 2 saree, 3 young man, 4 young woman (see HumanGeometry). */
-  variant: 0 | 1 | 2 | 3 | 4;
-  top: [number, number, number];
-  bottom: [number, number, number];
-  accent: [number, number, number];
-  skin: [number, number, number];
-  hair: number;
-  flags: [number, number, number, number];
-  misc: [number, number, number, number];
-  /** Shoe colour, hair style, skirt, sleeves (see CrowdMaterial aStyle). */
-  style: [number, number, number, number];
-  scale: number;
-}
 
 interface Agent {
   id: number;
@@ -51,8 +37,13 @@ interface Agent {
   waitAt: number;
   /** Walks briskly up to this waypoint index (across a road on the green man). */
   hurryUntil: number;
-  /** The other half of a couple walking together. */
+  /** Whom this one keeps pace with (a couple, friends, a family: the others keep pace with the first). */
   partner: Agent | null;
+  /** Everyone out together, the first leading; each walks `slot` metres to the left of the route. */
+  group: Agent[] | null;
+  slot: number;
+  /** With the partner: which side they are on and what the two are doing (POSE side + act). */
+  bond: number;
   /** Station agent leaving by the west exit: carries on as a street walker. */
   exitW: boolean;
   /** Street agent walking to the west exit: 'board' goes on to a platform, 'cross' through the concourse. */
@@ -94,139 +85,9 @@ export interface StreetConfig {
   seatOccupancy: (x: number, z: number) => number;
 }
 
-const lin = (hex: number): [number, number, number] => {
-  const c = new THREE.Color(hex);
-  return [c.r, c.g, c.b];
-};
-
-const SHIRTS = [0xf4f4f0, 0xe9eef7, 0xbcd2ec, 0x9fc0e6, 0xd9c7e6, 0xf0cfd6, 0xd8d8d2, 0xe8e0c8, 0x7aa0c8, 0x2d3e63, 0x1c1c1e, 0x6a7b5a, 0xc9a86a, 0xb33a3a, 0x3f7fb5, 0xf2d15c, 0x5c8f6b, 0x8e3b5f, 0x2f6f73, 0xd9773a, 0x4b4f8a, 0x9c2a2a];
-const TROUSERS = [0x1d1d20, 0x2a2b2e, 0x232a3e, 0x3b3f47, 0x8d7b5e, 0xb5a27f, 0x34496e, 0x2e4d7a, 0x4a4a4a, 0x5a4a3a];
-const KURTAS = [0xc2185b, 0xd84315, 0xf9a825, 0x00897b, 0x6a1b9a, 0x1565c0, 0xad1457, 0x2e7d32, 0xef6c00, 0xf5f5f5, 0x8d6e63, 0x5d4037, 0xe57373, 0x4dd0e1, 0xfff176, 0x7986cb];
-const SAREES = [0xd32f2f, 0xf57c00, 0x2e7d32, 0x1565c0, 0xc2185b, 0x6a1b9a, 0x00838f, 0xfbc02d, 0x8e24aa, 0xbf360c];
-const LEGGINGS = [0xf5f5f0, 0x1b1b1b, 0xd7ccc8, 0xf0e2c8, 0x37474f];
-const SKIN = [0x8d5a3b, 0x7a4b2e, 0xa46a45, 0xb77b54, 0x6b4028, 0x9a6444, 0xc08a62, 0x5c3822];
-/** T-shirts, polos and casual shirts. */
-const TEES = [0x111111, 0xf5f5f5, 0xc62828, 0x1e88e5, 0x43a047, 0xfdd835, 0x8e24aa, 0xff7043, 0x26c6da, 0x3949ab, 0x6d4c41, 0x9e9e9e, 0x5d6d3a, 0x546e7a, 0xe0e0d8, 0x0d47a1, 0xad1457, 0xffb300];
-/** Denim washes, black jeans, chinos, cargo. */
-const DENIM = [0x1f3a5f, 0x2c4f7c, 0x3d5f8f, 0x16223a, 0x5b7fae, 0x7896bf, 0x222222, 0xcbbf9f, 0x4e5b31, 0x3a3a3a];
-const GIRL_TOPS = [0xffffff, 0xf8bbd0, 0xffcdd2, 0xb3e5fc, 0xfff59d, 0xc5e1a5, 0x111111, 0xd81b60, 0x7e57c2, 0xff8a65, 0x4db6ac, 0xe1bee7, 0xfbe9e7, 0x90caf9, 0xef5350, 0xffca28, 0x26a69a, 0xf06292];
-const SKIRTS = [0x212121, 0x1a237e, 0xad1457, 0xf48fb1, 0xfafafa, 0x6d4c41, 0xc2185b, 0x00695c, 0xffe082, 0x5d4037, 0x283593, 0xe53935];
-
-/**
- * A random passer-by. `youth` is the share of young people (college students, couples): about a
- * third at the station, more on the evening promenade.
- */
-export function makeLook(rng: RNG, youth = 0.3): Look {
-  const skin = lin(rng.pick(SKIN));
-  if (rng.chance(youth)) return rng.chance(0.52) ? youngMan(rng, skin) : youngWoman(rng, skin);
-  const v = rng.weighted([
-    [0, 62],
-    [1, 26],
-    [2, 12],
-  ] as const) as 0 | 1 | 2;
-  const old = rng.chance(0.14);
-  const hair = old ? rng.range(0.45, 0.8) : rng.range(0, 0.06);
-  const scaleBase = v === 0 ? rng.range(0.97, 1.07) : rng.range(0.9, 0.99);
-  if (v === 0) {
-    const pattern = rng.weighted([
-      [0, 55],
-      [1, 20],
-      [2, 25],
-    ] as const);
-    return {
-      variant: 0,
-      top: lin(rng.pick(SHIRTS)),
-      bottom: lin(rng.chance(0.3) ? rng.pick(DENIM) : rng.pick(TROUSERS)),
-      accent: lin(rng.pick(SHIRTS)),
-      skin,
-      hair,
-      flags: [rng.chance(0.42) ? 1 : 0, rng.chance(0.18) ? 1 : 0, rng.chance(0.45) ? 1 : 0, pattern],
-      misc: [old && rng.chance(0.3) ? 1 : rng.chance(0.04) ? 2 : 0, rng.int(0, 3), rng.int(0, 2), rng.range(0.95, 1.12) * (rng.chance(0.5) ? -1 : 1)],
-      style: [rng.weighted([[0, 60], [2, 25], [3, 15]] as const), 0, 0, 0],
-      scale: scaleBase,
-    };
-  }
-  if (v === 1) {
-    return {
-      variant: 1,
-      top: lin(rng.pick(KURTAS)),
-      bottom: lin(rng.pick(LEGGINGS)),
-      accent: lin(rng.pick(KURTAS)),
-      skin,
-      hair: old ? rng.range(0.3, 0.6) : 0.0,
-      flags: [rng.chance(0.2) ? 1 : 0, rng.chance(0.65) ? 1 : 0, 0, rng.chance(0.35) ? 3 : 0],
-      misc: [0, rng.int(0, 3), rng.int(0, 2), rng.range(0.95, 1.08)],
-      style: [rng.chance(0.6) ? 3 : 0, 0, 0, 0],
-      scale: scaleBase,
-    };
-  }
-  return {
-    variant: 2,
-    top: lin(rng.pick(SAREES)),
-    bottom: lin(0x222222),
-    accent: lin(rng.pick(KURTAS)),
-    skin,
-    hair: old ? rng.range(0.3, 0.6) : 0.0,
-    flags: [0, rng.chance(0.7) ? 1 : 0, 0, 3],
-    misc: [0, 0, rng.int(0, 2), rng.range(0.98, 1.12)],
-    style: [3, 0, 0, 0],
-    scale: scaleBase,
-  };
-}
-
-/** Mumbai Police: khaki shirt and trousers, a cap, a moustache more often than not. */
-function policeLook(rng: RNG, cap: 1 | 2): Look {
-  const khaki = lin(0xa89066);
-  return {
-    variant: 0,
-    top: khaki,
-    bottom: lin(0x9c855c),
-    accent: khaki,
-    skin: lin(rng.pick(SKIN)),
-    hair: rng.range(0, 0.2),
-    flags: [0, 0, 0, 0],
-    misc: [cap, 0, 0, rng.range(1.02, 1.12) * (rng.chance(0.7) ? -1 : 1)],
-    style: [2, 0, 0, 0],
-    scale: rng.range(1.0, 1.06),
-  };
-}
-
-/** T-shirt or casual shirt, jeans, sneakers; a backpack or sling bag, now and then a cap. */
-function youngMan(rng: RNG, skin: [number, number, number]): Look {
-  const tee = rng.pick(TEES);
-  const shirt = rng.chance(0.25);
-  return {
-    variant: 3,
-    top: lin(tee),
-    bottom: lin(rng.pick(DENIM)),
-    accent: lin(rng.chance(0.6) ? tee : rng.pick(TEES)),
-    skin,
-    hair: rng.chance(0.12) ? -rng.range(0.25, 0.6) : rng.range(0, 0.02),
-    flags: [rng.chance(0.4) ? 1 : 0, rng.chance(0.25) ? 1 : 0, 0, shirt ? rng.weighted([[1, 50], [2, 50]] as const) : rng.chance(0.12) ? 1 : 0],
-    misc: [rng.chance(0.1) ? (rng.chance(0.5) ? 1 : 2) : 0, rng.int(0, 3), rng.int(0, 2), rng.range(0.93, 1.05) * (rng.chance(0.25) ? -1 : 1)],
-    style: [rng.weighted([[1, 55], [0, 30], [2, 15]] as const), 0, 0, shirt ? rng.weighted([[2, 60], [1, 40]] as const) : rng.chance(0.12) ? 2 : 1],
-    scale: rng.range(0.98, 1.07),
-  };
-}
-
-/** Fitted top with jeans, a skirt or a dress; hair open or in a ponytail; a handbag. */
-function youngWoman(rng: RNG, skin: [number, number, number]): Look {
-  const skirt = rng.chance(0.35);
-  const top = rng.pick(GIRL_TOPS);
-  // A one-piece dress now and then.
-  const bottom = skirt ? (rng.chance(0.4) ? top : rng.pick(SKIRTS)) : rng.pick(DENIM);
-  return {
-    variant: 4,
-    top: lin(top),
-    bottom: lin(bottom),
-    accent: lin(rng.pick([0xd4af37, 0xc0c0c0, 0x111111, 0xf5f5f5])),
-    skin,
-    hair: rng.chance(0.3) ? -rng.range(0.3, 0.8) : rng.range(0, 0.02),
-    flags: [rng.chance(0.22) ? 1 : 0, rng.chance(0.55) ? 1 : 0, 0, rng.chance(0.12) ? 1 : 0],
-    misc: [0, rng.int(0, 3), rng.int(0, 2), rng.range(0.92, 1.02)],
-    style: [skirt ? rng.weighted([[3, 40], [1, 30], [0, 30]] as const) : rng.weighted([[1, 50], [3, 25], [0, 25]] as const), rng.chance(0.35) ? 1 : 0, skirt ? 1 : 0, rng.weighted([[1, 55], [0, 25], [2, 20]] as const)],
-    scale: rng.range(0.9, 0.98),
-  };
+/** POSE side code for b as seen by a (facing `heading`): +x is a's left. */
+function sideOf(ax: number, az: number, heading: number, bx: number, bz: number): number {
+  return (bx - ax) * Math.cos(heading) - (bz - az) * Math.sin(heading) > 0 ? POSE.partnerPlusX : POSE.partnerMinusX;
 }
 
 /** Share of young people on the street (evening crowd at Marine Drive). */
@@ -273,7 +134,7 @@ const EXITS = {
   ],
 };
 
-const MAX = { man: 900, woman: 380, saree: 200, youth: 560, girl: 520 };
+const MAX = { man: 900, woman: 450, saree: 380, youth: 650, girl: 850 };
 const LOD_DIST = 16;
 const MAX_DIST = 200;
 
@@ -399,6 +260,9 @@ export class Crowd {
       waitAt: -1,
       hurryUntil: -1,
       partner: null,
+      group: null,
+      slot: 0,
+      bond: 0,
       exitW: false,
       intoStation: null,
     };
@@ -413,34 +277,99 @@ export class Crowd {
   configureStreet(cfg: StreetConfig): void {
     this.streetCfg = cfg;
     const rng = this.rng;
-    // Sunset crowd sitting on the sea wall; Marine Drive is where couples come to sit together.
-    const sitAt = (x: number, z: number, y: number, ry: number, look: Look) => {
-      const a = this.spawn(x, z, look);
+    // The sunset crowd on the sea wall: mostly people on their own or with a friend or two; now
+    // and then a couple (close together, her head on his shoulder, or turned to each other
+    // talking) or a family with a child between them.
+    const sitAt = (x: number, z: number, seat: StreetSpot, ry: number, look: Look) => {
+      // Hips on the wall top whatever the height; a child sits nearer the edge so the legs hang clear.
+      const fwd = Math.max(0, 0.39 - 0.42 * look.scale);
+      const a = this.spawn(x + Math.sin(ry) * fwd, z + Math.cos(ry) * fwd, look);
       a.street = true;
       a.state = 'sit';
-      a.pose = 1;
+      a.pose = POSE.sit;
       a.heading = ry;
-      a.y = y;
+      a.y = seat.y + 0.49 * (1 - look.scale);
       return a;
+    };
+    const together = (members: Agent[]) => {
+      for (const m of members) m.group = members;
     };
     for (let i = 0; i < cfg.seats.length; i++) {
       const seat = cfg.seats[i];
       if (!rng.chance(cfg.seatOccupancy(seat.x, seat.z))) continue;
-      const next = cfg.seats[i + 1];
-      if (next && Math.abs(next.ry - seat.ry) < 0.3 && rng.chance(0.3)) {
-        // A couple sharing two seats, close together, turned slightly towards each other.
+      const row = (k: number) => {
+        const n = cfg.seats[i + k];
+        return n && Math.abs(n.ry - seat.ry) < 0.3 && Math.hypot(n.x - seat.x, n.z - seat.z) < k * 0.8 ? n : null;
+      };
+      const next = row(1);
+      const r = rng.next();
+      if (next && r < 0.06) {
+        // A couple on two seats.
+        const kind = rng.weighted([
+          ['close', 3.5],
+          ['lean', 3],
+          ['talk', 3.5],
+        ] as const);
+        const half = kind === 'talk' ? 0.28 : 0.205;
+        const turn = kind === 'talk' ? 0.42 : kind === 'lean' ? 0.04 : 0.1;
         const mx = (seat.x + next.x) / 2;
         const mz = (seat.z + next.z) / 2;
-        const dx = (next.x - seat.x) / 2;
-        const dz = (next.z - seat.z) / 2;
-        const k = 0.27 / (Math.hypot(dx, dz) || 1);
-        const lad = rng.chance(0.5);
-        sitAt(mx - dx * k, mz - dz * k, seat.y, seat.ry + 0.12, lad ? youngMan(rng, lin(rng.pick(SKIN))) : youngWoman(rng, lin(rng.pick(SKIN))));
-        sitAt(mx + dx * k, mz + dz * k, seat.y, seat.ry - 0.12, lad ? youngWoman(rng, lin(rng.pick(SKIN))) : youngMan(rng, lin(rng.pick(SKIN))));
+        const ul = Math.hypot(next.x - seat.x, next.z - seat.z) || 1;
+        const ux = (next.x - seat.x) / ul;
+        const uz = (next.z - seat.z) / ul;
+        const older = rng.chance(0.25);
+        const her = makeLookOf(rng, older ? woman : youngWoman);
+        const him = makeLookOf(rng, older ? man : (q) => youngMan(q));
+        const herFirst = rng.chance(0.5);
+        const place = (look: Look, s: number) => {
+          const x = mx + ux * half * s;
+          const z = mz + uz * half * s;
+          const side = sideOf(x, z, seat.ry, mx - ux * half * s, mz - uz * half * s);
+          return { a: sitAt(x, z, seat, seat.ry + (side === POSE.partnerPlusX ? turn : -turn), look), side };
+        };
+        const h = place(her, herFirst ? -1 : 1);
+        const m = place(him, herFirst ? 1 : -1);
+        if (kind === 'lean') h.a.bond = h.side + POSE.lean;
+        else if (kind === 'talk') {
+          h.a.bond = h.side + POSE.talk;
+          m.a.bond = m.side + POSE.talk;
+        }
+        h.a.partner = m.a;
+        m.a.partner = h.a;
+        together([h.a, m.a]);
         i++;
         continue;
       }
-      sitAt(seat.x + rng.range(-0.12, 0.12), seat.z + rng.range(-0.12, 0.12), seat.y, seat.ry + rng.range(-0.25, 0.25), makeLook(rng, STREET_YOUTH));
+      if (next && r < 0.13) {
+        // Friends: two or three young people, the middle one chatting to a neighbour.
+        const n = row(2) && rng.chance(0.4) ? 3 : 2;
+        const mix = rng.weighted([
+          ['girls', 4.5],
+          ['boys', 3.5],
+          ['mixed', 2],
+        ] as const);
+        const members: Agent[] = [];
+        for (let k = 0; k < n; k++) {
+          const st = cfg.seats[i + k];
+          const girl = mix === 'girls' || (mix === 'mixed' && k % 2 === 0);
+          members.push(sitAt(st.x, st.z, st, st.ry + (k === 0 ? 0.12 : k === n - 1 ? -0.12 : 0), makeLookOf(rng, girl ? youngWoman : (q) => youngMan(q))));
+        }
+        const talker = members[n === 3 ? 1 : 0];
+        const listener = members[n === 3 ? (rng.chance(0.5) ? 0 : 2) : 1];
+        talker.bond = sideOf(talker.x, talker.z, talker.heading, listener.x, listener.z) + POSE.talk;
+        together(members);
+        i += n - 1;
+        continue;
+      }
+      if (next && row(2) && r < 0.155) {
+        // A family: mother, child, father.
+        const st2 = cfg.seats[i + 2];
+        const members = [sitAt(seat.x, seat.z, seat, seat.ry, makeLookOf(rng, woman)), sitAt(next.x, next.z, next, next.ry, makeLookOf(rng, child)), sitAt(st2.x, st2.z, st2, st2.ry, makeLookOf(rng, man))];
+        together(members);
+        i += 2;
+        continue;
+      }
+      sitAt(seat.x + rng.range(-0.12, 0.12), seat.z + rng.range(-0.12, 0.12), seat, seat.ry + rng.range(-0.25, 0.25), makeLook(rng, STREET_YOUTH));
     }
     for (const g of cfg.guards) {
       const a = this.spawn(g.x, g.z, policeLook(rng, g.cap));
@@ -452,19 +381,86 @@ export class Crowd {
       a.heading = g.ry;
       a.y = g.y;
     }
-    for (const st of [...cfg.standing, ...cfg.loiter]) {
-      const a = this.spawn(st.x, st.z, makeLook(rng, STREET_YOUTH));
+    const stand = (x: number, z: number, st: StreetSpot, ry: number, look: Look) => {
+      const a = this.spawn(x, z, look);
       a.street = true;
       a.state = 'idle';
       a.timer = 1e9;
       a.onArrive = 'wait';
-      a.face = st.ry;
-      a.heading = st.ry;
+      a.face = ry;
+      a.heading = ry;
       a.y = st.y;
-      a.pose = rng.chance(0.35) ? 2 : 0;
+      return a;
+    };
+    for (const st of cfg.standing) {
+      const r = rng.next();
+      if (r < 0.12) {
+        // A couple at the wall looking out to sea: holding hands, talking, or her head on his shoulder.
+        const ax = Math.cos(st.ry);
+        const az = -Math.sin(st.ry);
+        const act = rng.weighted([
+          [POSE.hands, 4.5],
+          [POSE.talk, 3],
+          [POSE.lean, 2.5],
+        ] as const);
+        const older = rng.chance(0.2);
+        const her = stand(st.x - ax * 0.24, st.z - az * 0.24, st, st.ry, makeLookOf(rng, older ? woman : youngWoman));
+        const him = stand(st.x + ax * 0.24, st.z + az * 0.24, st, st.ry, makeLookOf(rng, older ? man : (q) => youngMan(q)));
+        const hs = sideOf(her.x, her.z, st.ry, him.x, him.z);
+        const ms = sideOf(him.x, him.z, st.ry, her.x, her.z);
+        her.bond = hs + act;
+        him.bond = act === POSE.lean ? 0 : ms + act;
+        if (act === POSE.talk) {
+          her.face = her.heading = st.ry + (hs === POSE.partnerPlusX ? 0.35 : -0.35);
+          him.face = him.heading = st.ry + (ms === POSE.partnerPlusX ? 0.35 : -0.35);
+        }
+        her.partner = him;
+        him.partner = her;
+        together([her, him]);
+        continue;
+      }
+      const tourist = r < 0.2;
+      const a = stand(st.x, st.z, st, st.ry, tourist ? makeLookOf(rng, rng.chance(0.55) ? woman : man) : makeLook(rng, STREET_YOUTH));
+      // Tourists photograph the sunset; others check their phones.
+      a.pose = tourist ? POSE.photo : rng.chance(0.35) ? POSE.phone : POSE.stand;
+    }
+    for (const st of cfg.loiter) {
+      const a = stand(st.x, st.z, st, st.ry, makeLook(rng, STREET_YOUTH));
+      a.pose = rng.chance(0.35) ? POSE.phone : POSE.stand;
     }
     // Pre-warm walkers spread along their routes.
     for (let i = 0; i < cfg.walkers; i++) this.spawnStreetWalker(true);
+  }
+
+  /** Couples, friends and families out together (test API): where each group is and what the first is doing. */
+  groups(): { x: number; z: number; heading: number; n: number; bond: number; state: State }[] {
+    const seen = new Set<Agent[]>();
+    const out: { x: number; z: number; heading: number; n: number; bond: number; state: State }[] = [];
+    for (const a of this.agents)
+      if (a.group && !seen.has(a.group)) {
+        seen.add(a.group);
+        const b = a.group.find((m) => m.bond) ?? a;
+        out.push({ x: +a.x.toFixed(2), z: +a.z.toFixed(2), heading: +a.heading.toFixed(3), n: a.group.length, bond: b.bond, state: a.state });
+      }
+    return out;
+  }
+
+  /** For looking over the crowd (test API): n people drawn as on the promenade, in a row at (x, z) facing ry. */
+  lineup(x: number, z: number, ry: number, n: number, who: 'women' | 'all' = 'women'): void {
+    const ax = Math.cos(ry);
+    const az = -Math.sin(ry);
+    for (let i = 0; i < n; i++) {
+      const o = (i - (n - 1) / 2) * 0.72;
+      const look = who === 'women' ? makeLookOf(this.rng, (q) => (q.chance(0.55) ? youngWoman(q) : woman(q))) : makeLook(this.rng, STREET_YOUTH);
+      const a = this.spawn(x + ax * o, z + az * o, look);
+      a.street = true;
+      a.state = 'idle';
+      a.timer = 1e9;
+      a.onArrive = 'wait';
+      a.face = ry;
+      a.heading = ry;
+      a.y = this.streetCfg ? this.streetCfg.ground(a.x, a.z) : Y.platform;
+    }
   }
 
   private spawnStreetWalker(prewarm: boolean, into: 'board' | 'cross' | null = null): void {
@@ -480,9 +476,19 @@ export class Crowd {
     if (prewarm) start = rng.int(0, r.pts.length - 2);
     // Nobody starts out in the middle of the zebra: they begin at the kerb and wait for the green man.
     if (r.waitAt >= 0 && start >= r.waitAt && start <= r.waitAt + 1) start = Math.max(0, r.waitAt - 1);
-    const couple = !into && rng.chance(0.16);
-    const pref = couple ? rng.range(0.95, 1.2) : rng.range(1.05, 1.45);
-    const walker = (pts: { x: number; z: number }[], look: Look) => {
+    // Most walk alone; a few couples, friends and families stroll together; joggers keep to the promenade.
+    const kind = into
+      ? 'solo'
+      : rng.weighted([
+          ['solo', 78],
+          ['couple', 7],
+          ['friends', 7],
+          ['family', 3.5],
+          ['jog', r.waitAt < 0 && !r.linger && !r.into ? 6 : 0],
+        ] as const);
+    const pref = kind === 'jog' ? rng.range(2.4, 3.1) : kind === 'family' ? rng.range(0.85, 1.05) : kind === 'solo' ? rng.range(1.05, 1.45) : rng.range(0.95, 1.25);
+    const walker = (slot: number, look: Look) => {
+      const pts = slot ? offsetPath(r.pts, slot) : r.pts;
       const p0 = pts[start];
       const a = this.spawn(p0.x, p0.z, look);
       a.street = true;
@@ -495,23 +501,57 @@ export class Crowd {
         a.timer = r.linger.seconds;
       }
       a.pref = pref;
+      a.slot = slot;
       a.y = cfg.ground(a.x, a.z);
       const n = pts[Math.min(pts.length - 1, a.pi)];
       a.heading = Math.atan2(n.x - a.x, n.z - a.z);
+      a.intoStation = into ?? r.into ?? null;
       this.streetWalkers++;
       return a;
     };
-    if (!couple) {
-      walker(r.pts, makeLook(rng, into ? 0.3 : STREET_YOUTH)).intoStation = into ?? r.into ?? null;
+    if (kind === 'solo') {
+      walker(0, makeLook(rng, into ? 0.3 : STREET_YOUTH));
       return;
     }
-    // A couple strolls side by side: the same route, 0.55 m apart.
-    const a = walker(r.pts, youngMan(rng, lin(rng.pick(SKIN))));
-    const b = walker(offsetPath(r.pts, 0.55), youngWoman(rng, lin(rng.pick(SKIN))));
-    a.intoStation = b.intoStation = r.into ?? null;
-    a.partner = b;
-    b.partner = a;
-    if (r.linger) b.face = r.linger.ry;
+    if (kind === 'jog') {
+      walker(0, makeLookOf(rng, (q) => jogger(q, q.chance(0.45))));
+      return;
+    }
+    let members: Agent[];
+    if (kind === 'couple') {
+      // Side by side, 0.55 m apart (offsetPath puts the second on the first's left, +x): holding hands, talking, or just walking.
+      const older = rng.chance(0.25);
+      const herLeft = rng.chance(0.5);
+      const her = makeLookOf(rng, older ? woman : youngWoman);
+      const him = makeLookOf(rng, older ? man : (q) => youngMan(q));
+      members = [walker(0, herLeft ? him : her), walker(0.55, herLeft ? her : him)];
+      const act = rng.weighted([
+        [POSE.hands, 5],
+        [POSE.talk, 2.5],
+        [0, 2.5],
+      ] as const);
+      if (act) {
+        members[0].bond = POSE.partnerPlusX + act;
+        members[1].bond = POSE.partnerMinusX + act;
+      }
+    } else if (kind === 'friends') {
+      const n = rng.chance(0.4) ? 3 : 2;
+      const mix = rng.weighted([
+        ['girls', 4.5],
+        ['boys', 3.5],
+        ['mixed', 2],
+      ] as const);
+      members = [];
+      for (let k = 0; k < n; k++) members.push(walker(k * 0.62, makeLookOf(rng, mix === 'girls' || (mix === 'mixed' && k % 2 === 0) ? youngWoman : (q) => youngMan(q))));
+      members[1].bond = POSE.partnerMinusX + POSE.talk;
+    } else {
+      // A family: father, mother, a child beside her, sometimes another on his other side.
+      members = [walker(0, makeLookOf(rng, man)), walker(0.6, makeLookOf(rng, woman)), walker(1.1, makeLookOf(rng, child))];
+      if (rng.chance(0.35)) members.push(walker(-0.5, makeLookOf(rng, child)));
+    }
+    members[0].partner = members[1];
+    for (const m of members.slice(1)) m.partner = members[0];
+    for (const m of members) m.group = members;
   }
 
   private readonly sight = { frustum: new THREE.Frustum(), pos: new THREE.Vector3(1e9, 0, 0), sphere: new THREE.Sphere(new THREE.Vector3(), 1.2) };
@@ -774,6 +814,8 @@ export class Crowd {
     }
     for (const a of this.agents) {
       if (a.state === 'gone') continue;
+      // Talking: the head and a hand move on the phase.
+      if (a.state !== 'walk' && Math.floor(a.bond / 32) === 3) a.phase += dt * 1.6;
       if (a.state === 'sit') continue;
       if (a.state === 'idle') {
         a.timer -= dt;
@@ -790,16 +832,21 @@ export class Crowd {
         }
         if (a.face !== null) a.heading = THREE.MathUtils.lerp(a.heading, a.face, 1 - Math.exp(-dt * 2));
         if (a.onArrive === 'linger' && a.timer <= 0 && a.pi >= a.path.length) {
-          // Time to go: stroll off along the promenade (a couple leaves together).
+          // Time to go: stroll off along the promenade (a couple or a group leaves together, each
+          // keeping their place beside the others).
           const pts = this.streetCfg ? this.streetCfg.leave(a.x, a.z, rng) : [];
           if (pts.length < 2) {
             a.state = 'gone';
             this.streetWalkers--;
             continue;
           }
-          const mate = a.partner;
-          for (const m of mate && mate.state === 'idle' && mate.onArrive === 'linger' ? [a, mate] : [a]) {
-            m.path = m === a ? pts : offsetPath(pts, (m.x - a.x) * (pts[1].z - pts[0].z) - (m.z - a.z) * (pts[1].x - pts[0].x) > 0 ? 0.55 : -0.55);
+          const ex = pts[1].x - pts[0].x;
+          const ez = pts[1].z - pts[0].z;
+          const el = Math.hypot(ex, ez) || 1;
+          const going = a.group ? a.group.filter((m) => m === a || (m.state === 'idle' && m.onArrive === 'linger')) : [a];
+          for (const m of going) {
+            const off = THREE.MathUtils.clamp(((m.x - a.x) * ez - (m.z - a.z) * ex) / el, -1.4, 1.4);
+            m.path = m === a ? pts : offsetPath(pts, off);
             m.pi = 0;
             m.onArrive = 'despawn';
             m.state = 'walk';
@@ -856,7 +903,7 @@ export class Crowd {
           const l = this.grid.get((ix + 1000) * 4000 + (iz + 2000));
           if (!l) continue;
           for (const b of l) {
-            if (b === a || b === a.partner) continue;
+            if (b === a || b === a.partner || (a.group !== null && b.group === a.group)) continue;
             const ox = a.x - b.x;
             const oz = a.z - b.z;
             const d2 = ox * ox + oz * oz;
@@ -933,9 +980,12 @@ export class Crowd {
       return;
     }
     if (a.street && a.intoStation) {
-      // Up the steps into the concourse.
+      // Up the steps into the concourse (from here on everyone goes their own way).
       const into = a.intoStation;
       a.intoStation = null;
+      a.partner = null;
+      a.group = null;
+      a.bond = 0;
       a.street = false;
       this.streetWalkers--;
       a.state = 'walk';
@@ -964,8 +1014,13 @@ export class Crowd {
       return;
     }
     if (a.onArrive === 'linger') {
+      // At the wall: a phone out, now and then a photo of the sunset; couples stay as they are.
       a.state = 'idle';
-      a.pose = this.rng.chance(0.4) ? 2 : 0;
+      a.pose = a.bond ? POSE.stand : this.rng.weighted([
+        [POSE.stand, 5],
+        [POSE.phone, 3.5],
+        [POSE.photo, 1.5],
+      ] as const);
       return;
     }
     if (a.onArrive === 'despawn') a.state = 'gone';
@@ -1016,20 +1071,14 @@ export class Crowd {
       p.set(x, y, z);
       m.compose(p, q, one);
       slot.mesh.setMatrixAt(i, m);
-      const A = slot.attrs;
-      A.aAnim.setXYZW(i, phase, amp, pose, look.scale);
-      A.aTop.setXYZ(i, ...look.top);
-      A.aBottom.setXYZ(i, ...look.bottom);
-      A.aAccent.setXYZ(i, ...look.accent);
-      A.aSkinHair.setXYZW(i, ...look.skin, look.hair);
-      A.aFlags.setXYZW(i, ...look.flags);
-      A.aMisc.setXYZW(i, ...look.misc);
-      A.aStyle.setXYZW(i, ...look.style);
+      writeLook(slot.attrs, i, look, phase, amp, pose);
     };
     for (const a of this.agents) {
-      // Shorter strides in a saree.
-      const amp = Math.min(1, a.speed / 1.3) * (a.look.variant === 2 ? 0.6 : 1);
-      put(a.look, a.x, a.y, a.z, a.heading, a.phase, a.state === 'sit' ? 0 : amp, a.pose);
+      // Shorter strides in a saree or a long skirt, longer at a run; with a partner, hand in hand,
+      // leaning on a shoulder or turned to talk.
+      const amp = Math.min(a.speed > 2.1 ? 1.45 : 1, a.speed / 1.3) * a.look.stride;
+      const pose = a.bond && a.pose <= POSE.sit ? a.pose + a.bond : a.pose;
+      put(a.look, a.x, a.y, a.z, a.heading, a.phase, a.state === 'sit' ? 0 : amp, pose);
     }
     // Passengers inside standing / departing trains (and hanging out of doorways).
     for (const v of this.trains.views) {

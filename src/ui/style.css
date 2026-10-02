@@ -347,6 +347,13 @@ button.secondary:hover {
 .cine-on .letterbox {
   height: 11.5vh;
 }
+.lb-on .letterbox {
+  height: 9vh;
+}
+.lb-on .hud .hints,
+.lb-on .ride-hint {
+  opacity: 0 !important;
+}
 .title-card {
   position: absolute;
   left: clamp(24px, 6vw, 96px);

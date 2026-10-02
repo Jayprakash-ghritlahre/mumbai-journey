@@ -180,8 +180,8 @@ export function pathWall(path: Path2, s0: number, s1: number, o: number, y0: num
     uv.push(s, 0, s, y1 - y0);
     if (i > 0) {
       const k = (i - 1) * 2;
-      if (facing > 0) idx.push(k, k + 2, k + 1, k + 1, k + 2, k + 3);
-      else idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2);
+      if (facing > 0) idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2);
+      else idx.push(k, k + 2, k + 1, k + 1, k + 2, k + 3);
     }
   }
   const g = new THREE.BufferGeometry();

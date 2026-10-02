@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RNG } from '../../core/Random';
 import { buildHeroCar, cabinLit, type HeroCar } from '../../entities/train/HeroCar';
 import { Riders } from '../../entities/crowd/Riders';
-import { makeLook, type Look } from '../../entities/crowd/Crowd';
+import { makeLook, type Look } from '../../entities/crowd/Looks';
 import { CAR } from '../../entities/train/Livery';
 import { A_BRAKE, ARRIVAL_SECONDS, FAR, V_IN, type FreeTrain } from '../../entities/train/TrainSystem';
 import { fmtTime } from '../../entities/train/Timetable';
