@@ -1,5 +1,5 @@
 import type { Quality } from '../core/Engine';
-import type { TimePreset } from '../gfx/TimeOfDay';
+import { PRESET_LABEL, PRESET_ORDER, type TimePreset } from '../gfx/TimeOfDay';
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, html?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -14,6 +14,8 @@ export interface HudCallbacks {
   onStartJourney: () => void;
   /** Ride the local yourself, Mira Road → Churchgate. */
   onRide: () => void;
+  /** Take an auto from Shanti Nagar to Mira Road station. */
+  onAuto: () => void;
   onExplore: (where: ExploreStart) => void;
   onTime: (t: TimePreset) => void;
   onQuality: (q: Quality) => void;
@@ -86,17 +88,20 @@ export class Hud {
       el(
         'div',
         'sub',
-        'Catch the Churchgate fast at Mira Road and ride the Western line down past the salt pans, the suburbs and Mahim Creek into Churchgate. Walk out with the crowd along Veer Nariman Road, cross Marine Drive to the sea wall, and stroll on to Nariman Point as the sun sets over the Arabian Sea and the Queen\'s Necklace lights up.',
+        'Take an auto from Shanti Nagar through the lanes and up Poonam Sagar Road to Mira Road station. Catch the Churchgate fast there and ride the Western line down past the salt pans, the suburbs and Mahim Creek into Churchgate. Walk out with the crowd along Veer Nariman Road, cross Marine Drive to the sea wall, and stroll on to Nariman Point as the sun sets over the Arabian Sea and the Queen\'s Necklace lights up.',
       ),
     );
     const route = el('div', 'route');
-    route.innerHTML = ['NG Galaxy', '<b>Mira Road</b>', '<b>Mumbai Local</b>', '<b>Churchgate</b>', '<b>Marine Drive</b>', '<b>Nariman Point</b>'].join(' <span>›</span> ');
+    route.innerHTML = ['<b>Shanti Nagar</b>', '<b>Auto</b>', '<b>Mira Road</b>', '<b>Mumbai Local</b>', '<b>Churchgate</b>', '<b>Marine Drive</b>', '<b>Nariman Point</b>'].join(' <span>›</span> ');
     left.append(route);
 
     const actions = el('div', 'actions');
     const row = el('div', 'btn-row');
     const start = el('button', 'primary', '▶&nbsp; Start journey');
     start.addEventListener('click', () => cb.onStartJourney());
+    const auto = el('button', 'secondary', 'Auto to the station');
+    auto.title = 'Wave down an auto in Shanti Nagar and ride to Mira Road station';
+    auto.addEventListener('click', () => cb.onAuto());
     const ride = el('button', 'secondary', 'Ride the local');
     ride.title = 'Board at Mira Road and ride to Churchgate yourself';
     ride.addEventListener('click', () => cb.onRide());
@@ -109,18 +114,13 @@ export class Hud {
     exploreMD.addEventListener('click', () => cb.onExplore('marine-drive'));
     const exploreNP = el('button', 'secondary', 'Explore Nariman Point');
     exploreNP.addEventListener('click', () => cb.onExplore('nariman-point'));
-    row.append(start, ride, exploreMR, explore, exploreMD, exploreNP);
+    row.append(start, auto, ride, exploreMR, explore, exploreMD, exploreNP);
 
     const timeWrap = el('div');
     timeWrap.append(el('div', 'opt-label', 'Time of day'));
     const timeSeg = el('div', 'seg');
-    const times: [TimePreset, string][] = [
-      ['morning', 'Morning'],
-      ['afternoon', 'Afternoon'],
-      ['golden', 'Golden hour'],
-      ['night', 'Night'],
-    ];
-    for (const [k, label] of times) {
+    for (const k of PRESET_ORDER) {
+      const label = PRESET_LABEL[k];
       const b = el('button', k === initial.time ? 'on' : '', label);
       b.addEventListener('click', () => cb.onTime(k));
       this.timeButtons.set(k, b);
@@ -247,6 +247,11 @@ export class Hud {
     this.root.classList.toggle('cine-on', on);
   }
 
+  /** Letterbox bars for a short in-game scene (no film controls), the controls' help hidden. */
+  letterbox(on: boolean): void {
+    this.root.classList.toggle('lb-on', on);
+  }
+
   title(t1: string, t2 = '', t3 = ''): void {
     const [a, b, c] = Array.from(this.titleCard.children) as HTMLElement[];
     a.textContent = t1;
@@ -282,19 +287,21 @@ export class Hud {
     this.hintEl.classList.toggle('show', !!text);
   }
 
-  /** Keyboard help for the current mode ('explore' or 'ride'). */
-  setHints(kind: 'explore' | 'ride'): void {
+  /** Keyboard help for the current mode ('explore', 'ride' or 'auto'). */
+  setHints(kind: 'explore' | 'ride' | 'auto'): void {
     if (!this.hintsHtml) this.hintsHtml = this.hints.innerHTML;
     this.hints.innerHTML =
       kind === 'ride'
         ? '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &nbsp; <kbd>Mouse</kbd> look &nbsp; <kbd>E</kbd> sit / stand &nbsp; <kbd>N</kbd> skip ahead &nbsp; <kbd>Esc</kbd> menu'
-        : this.hintsHtml;
+        : kind === 'auto'
+          ? '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk &nbsp; <kbd>Mouse</kbd> look &nbsp; <kbd>E</kbd> wave / get in / pay &nbsp; <kbd>N</kbd> skip ahead &nbsp; <kbd>T</kbd> time of day &nbsp; <kbd>Esc</kbd> menu'
+          : this.hintsHtml;
   }
 
-  toast(text: string): void {
+  toast(text: string, ms = 1800): void {
     this.toastEl.textContent = text;
     this.toastEl.classList.add('show');
     clearTimeout(this.toastTimer);
-    this.toastTimer = window.setTimeout(() => this.toastEl.classList.remove('show'), 1800);
+    this.toastTimer = window.setTimeout(() => this.toastEl.classList.remove('show'), ms);
   }
 }

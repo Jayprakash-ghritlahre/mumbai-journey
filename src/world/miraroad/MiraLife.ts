@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { RNG } from '../../core/Random';
-import { makeLook, type Look } from '../../entities/crowd/Crowd';
+import { POSE, makeLook, type Look } from '../../entities/crowd/Looks';
 import { Riders } from '../../entities/crowd/Riders';
 import { CAR } from '../../entities/train/Livery';
 import type { FreeTrain, TrainSystem } from '../../entities/train/TrainSystem';
@@ -196,7 +196,8 @@ export interface CrowdSetup {
   /** Forecourt gates and street walks. */
   gates: Pt[];
   walks: THREE.Vector3[][];
-  spots: { kind: string; x: number; z: number; y: number; h: number }[];
+  /** Where people wait or hang about; `pose` fixes how (1 seated on a chair or ledge). */
+  spots: { kind: string; x: number; z: number; y: number; h: number; pose?: number }[];
   autoHeads: Pt[];
   seats: { x: number; y: number; z: number; h: number }[];
   stalls: { x: number; z: number; h: number }[];
@@ -242,6 +243,8 @@ export class MiraPeople {
   private spawnT = 0;
   private looks: Look[] = [];
   private lookK = 0;
+  /** The camera (local) as of the last update: flows start where someone will see them. */
+  private cam = new THREE.Vector3();
 
   constructor(
     av: AmbientVolume,
@@ -500,8 +503,13 @@ export class MiraPeople {
         if (r.chance(0.35)) this.add(sp.x, sp.y - 0.12, sp.z, Math.PI + r.range(-0.3, 0.3), 'idle', 1);
         continue;
       }
+      if (sp.pose === 1) {
+        this.add(sp.x, sp.y, sp.z, sp.h, 'idle', 1);
+        continue;
+      }
       const n = sp.kind === 'forecourt' ? r.int(1, 3) : 1;
-      for (let k = 0; k < n; k++) this.add(sp.x + r.range(-0.8, 0.8), sp.y, sp.z + r.range(-0.8, 0.8), sp.h + r.range(-0.5, 0.5), 'idle', r.chance(0.35) ? 2 : 0);
+      const jit = sp.pose === undefined ? 0.8 : 0.15;
+      for (let k = 0; k < n; k++) this.add(sp.x + r.range(-jit, jit), sp.y, sp.z + r.range(-jit, jit), sp.h + r.range(-0.5, 0.5), 'idle', sp.pose ?? (r.chance(0.35) ? 2 : 0));
     }
     // Some already on their way.
     for (let k = 0; k < 40; k++) this.spawnFlow(hour, true);
@@ -512,8 +520,8 @@ export class MiraPeople {
     const r = this.rng;
     const k = r.next();
     if (k < 0.45) {
-      // Along a footpath, end to end.
-      const w = r.pick(this.s.walks);
+      // Along a footpath, end to end (one near where you are, mostly).
+      const w = this.pickWalk();
       const path = r.chance(0.5) ? w : [...w].reverse();
       const start = anywhere ? r.int(0, path.length - 2) : 0;
       this.walk(path.slice(start).map((v) => v.clone()), 'gone');
@@ -523,6 +531,46 @@ export class MiraPeople {
       if (this.count(pf) < waiting(pf, hour) * 1.1) this.arrive(pf, r.chance(0.2));
     }
     void anywhere;
+  }
+
+  private pickWalk(): THREE.Vector3[] {
+    const r = this.rng;
+    for (let k = 0; k < 8; k++) {
+      const w = r.pick(this.s.walks);
+      const q = w[Math.floor(w.length / 2)];
+      if ((q.x - this.cam.x) ** 2 + (q.z - this.cam.z) ** 2 < 200 * 200 || (w[0].x - this.cam.x) ** 2 + (w[0].z - this.cam.z) ** 2 < 160 * 160) return w;
+    }
+    return r.pick(this.s.walks);
+  }
+
+  /** Someone walks this path now (local points), then goes on their way or stands about. */
+  walkPath(path: THREE.Vector3[], then: 'gone' | 'idle' = 'gone', speed = 1.35): boolean {
+    const p = this.walk(path, then);
+    if (p) p.speed = speed;
+    return !!p;
+  }
+
+  /**
+   * Distance to the nearest person ahead of (x, z, heading h) within `half` of that line, out to
+   * `range` (local), for a vehicle that must not run them down.
+   */
+  blocking(x: number, z: number, h: number, range: number, half: number): number {
+    const dx0 = Math.sin(h);
+    const dz0 = Math.cos(h);
+    let best = Infinity;
+    for (const p of this.people) {
+      if (p.mode === 'gone' || (p.mode === 'walk' && p.delay > 0)) continue;
+      const dx = p.x - x;
+      const dz = p.z - z;
+      const along = dx * dx0 + dz * dz0;
+      if (along <= 0 || along > range) continue;
+      // Walkers anywhere across its width; someone standing about only right in its way.
+      const lat = Math.abs(dx * dz0 - dz * dx0);
+      if (lat > (p.mode === 'idle' || p.mode === 'wait' ? 0.75 : half + 0.3)) continue;
+      if (Math.abs(p.y - -0.4) > 0.9) continue;
+      best = Math.min(best, along);
+    }
+    return best;
   }
 
   private count(pf: number): number {
@@ -572,6 +620,7 @@ export class MiraPeople {
 
   // ---- Per frame -------------------------------------------------------------------------------------
   update(dt: number, hour: number, camLocal: THREE.Vector3, ride: { doorsWorld: () => { x: number; z: number; car: number }[]; stopped: boolean; doorsOpen: boolean } | null): void {
+    this.cam.copy(camLocal);
     // Keep the flows going.
     this.spawnT += dt;
     while (this.spawnT > 0.55) {
@@ -679,7 +728,13 @@ export class MiraPeople {
 
 // -------------------------------------------------------------------------------------------------
 type Kind = 'auto' | 'bike' | 'scooter' | 'car' | 'suv' | 'cab' | 'bus' | 'tempo';
+/** Autos nearer than this (m) get the detailed body; further off, the plain one (AutoShell 'far'). */
+const AUTO_NEAR = 60;
 const LEN: Record<Kind, number> = { auto: 2.6, bike: 1.9, scooter: 1.8, car: 3.9, suv: 4.4, cab: 4.0, bus: 11, tempo: 5 };
+/** Half widths (m). */
+const HALF: Record<Kind, number> = { auto: 0.66, bike: 0.36, scooter: 0.36, car: 0.88, suv: 0.95, cab: 0.88, bus: 1.3, tempo: 0.95 };
+
+export type TrafficMix = 'station' | 'city' | 'lane';
 
 interface Route {
   pts: Pt[];
@@ -687,7 +742,9 @@ interface Route {
   length: number;
   speed: number;
   lanes: number[];
-  mix: 'station' | 'city';
+  mix: TrafficMix;
+  /** Stop lines on this route (s) and the signal phase that holds them. */
+  stops: { s: number; phase: 0 | 1 }[];
 }
 
 interface Veh {
@@ -699,21 +756,62 @@ interface Veh {
   color: THREE.Color;
   riders: Look[];
   want: number;
+  /** Where it was drawn last frame (local), its heading. */
+  x: number;
+  z: number;
+  h: number;
+  id: number;
 }
 
-/** Vehicles on the streets round the station, with riders on the two-wheelers and in the autos. */
+/** Something on the road the traffic must not drive through (the ridden auto). */
+export interface RoadObstacle {
+  x: number;
+  z: number;
+  h: number;
+  len: number;
+  half: number;
+}
+
+const wrapA = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+
+/** Is b in front of a, within a's lane (reach: b's sideways extent as seen by a, plus a's half width)? */
+function inFront(ax: number, az: number, ah: number, aHalf: number, bx: number, bz: number, bh: number, bHalf: number, bLen: number, range: number): number {
+  const dx0 = Math.sin(ah);
+  const dz0 = Math.cos(ah);
+  const dx = bx - ax;
+  const dz = bz - az;
+  const along = dx * dx0 + dz * dz0;
+  if (along <= 0 || along > range) return -1;
+  const dh = Math.abs(Math.sin(wrapA(bh - ah)));
+  const reach = bHalf * (1 - dh) + (bLen / 2) * dh;
+  if (Math.abs(dx * dz0 - dz * dx0) > reach + aHalf + 0.2) return -1;
+  return along;
+}
+
+/**
+ * Vehicles on the streets round the station and along the auto ride, with riders on the
+ * two-wheelers and in the autos. Each keeps its lane on its route and follows whatever is ahead of
+ * it in that lane (on any route), stops at the junction's stop lines on red, and does not drive
+ * through the ridden auto.
+ */
 export class MiraTraffic {
   readonly group = new THREE.Group();
   readonly riders: Riders;
   private routes: Route[] = [];
   private vehicles: Veh[] = [];
   private meshes = new Map<Kind, THREE.InstancedMesh>();
+  private autoFar: THREE.InstancedMesh | null = null;
   private readonly rng = new RNG(4242);
   private readonly m = new THREE.Matrix4();
+  /** Obstacles this frame (set by the ride). */
+  obstacles: RoadObstacle[] = [];
+  /** The junction's lights (0 red, 1 amber, 2 green per phase). */
+  signal: { state(phase: 0 | 1): 0 | 1 | 2 } | null = null;
+  private grid = new Map<number, Veh[]>();
 
-  constructor(av: AmbientVolume, mat: THREE.Material, routes: { pts: Pt[]; speed: number; lanes: number[]; mix: 'station' | 'city' }[]) {
+  constructor(av: AmbientVolume, mat: THREE.Material, routes: { pts: Pt[]; speed: number; lanes: number[]; mix: TrafficMix; count?: number }[]) {
     this.group.name = 'mira-traffic';
-    this.riders = new Riders(av, 220, { lod: 1, shadows: false });
+    this.riders = new Riders(av, 260, { lod: 1, shadows: false });
     this.group.add(this.riders.group);
     const geos: Record<Kind, THREE.BufferGeometry> = {
       auto: autoRickshaw(),
@@ -728,7 +826,7 @@ export class MiraTraffic {
     for (const r of routes) {
       const cum = [0];
       for (let i = 1; i < r.pts.length; i++) cum.push(cum[i - 1] + Math.hypot(r.pts[i][0] - r.pts[i - 1][0], r.pts[i][1] - r.pts[i - 1][1]));
-      this.routes.push({ ...r, cum, length: cum[cum.length - 1] });
+      this.routes.push({ pts: r.pts, speed: r.speed, lanes: r.lanes, mix: r.mix, cum, length: cum[cum.length - 1], stops: [] });
     }
     const rng = this.rng;
     const looks: Look[] = [];
@@ -736,10 +834,16 @@ export class MiraTraffic {
     const BODY = ['#f2f2ef', '#c9ccce', '#8e9296', '#2a2d31', '#7a1d1d', '#1d3f7a', '#b7b09e', '#e8e4da'].map((c) => new THREE.Color(c));
     const BIKE = ['#161616', '#7a1414', '#1b3d8a', '#5a5f63', '#dcdcd6', '#20262e'].map((c) => new THREE.Color(c));
     this.routes.forEach((r, ri) => {
-      const n = Math.round(r.length / (r.mix === 'station' ? 26 : 34));
+      const spec = routes[ri];
+      const n = spec.count ?? Math.round(r.length / (r.mix === 'station' ? 26 : 34));
       for (let k = 0; k < n; k++) {
         const x = rng.next();
-        const kind: Kind = r.mix === 'station' ? (x < 0.5 ? 'auto' : x < 0.66 ? 'bike' : x < 0.76 ? 'scooter' : x < 0.88 ? 'car' : x < 0.93 ? 'cab' : x < 0.97 ? 'bus' : 'tempo') : x < 0.34 ? 'auto' : x < 0.5 ? 'bike' : x < 0.6 ? 'scooter' : x < 0.78 ? 'car' : x < 0.86 ? 'suv' : x < 0.92 ? 'cab' : x < 0.96 ? 'bus' : 'tempo';
+        const kind: Kind =
+          r.mix === 'lane'
+            ? x < 0.42 ? 'auto' : x < 0.72 ? 'bike' : 'scooter'
+            : r.mix === 'station'
+              ? x < 0.5 ? 'auto' : x < 0.66 ? 'bike' : x < 0.76 ? 'scooter' : x < 0.88 ? 'car' : x < 0.93 ? 'cab' : x < 0.97 ? 'bus' : 'tempo'
+              : x < 0.44 ? 'auto' : x < 0.58 ? 'bike' : x < 0.68 ? 'scooter' : x < 0.82 ? 'car' : x < 0.88 ? 'suv' : x < 0.92 ? 'cab' : x < 0.96 ? 'bus' : 'tempo';
         const riders: Look[] = [];
         if (kind === 'bike' || kind === 'scooter') {
           riders.push(rng.pick(looks));
@@ -749,7 +853,12 @@ export class MiraTraffic {
           for (let q = 0; q < rng.int(0, 2); q++) riders.push(rng.pick(looks));
         }
         const want = r.speed * (kind === 'bus' ? 0.8 : kind === 'bike' || kind === 'scooter' ? 1.15 : kind === 'tempo' ? 0.85 : 1) * rng.range(0.85, 1.1);
-        this.vehicles.push({ route: ri, s: ((k + rng.range(0, 0.6)) / n) * r.length, v: want, lane: rng.pick(r.lanes) + rng.range(-0.3, 0.3), kind, color: kind === 'bike' || kind === 'scooter' ? rng.pick(BIKE) : kind === 'cab' ? new THREE.Color('#e8e4da') : rng.pick(BODY), riders, want });
+        const v: Veh = { id: this.vehicles.length, route: ri, s: ((k + rng.range(0, 0.6)) / n) * r.length, v: want, lane: rng.pick(r.lanes) + rng.range(-0.3, 0.3), kind, color: kind === 'bike' || kind === 'scooter' ? rng.pick(BIKE) : kind === 'cab' ? new THREE.Color('#e8e4da') : kind === 'auto' ? new THREE.Color().setScalar(rng.range(0.85, 1.05)) : rng.pick(BODY), riders, want, x: 0, z: 0, h: 0 };
+        const p = this.at(r, v.s, v.lane);
+        v.x = p.x;
+        v.z = p.z;
+        v.h = p.h;
+        this.vehicles.push(v);
       }
     });
     const counts = new Map<Kind, number>();
@@ -765,6 +874,39 @@ export class MiraTraffic {
       for (let i = 0; i < n; i++) mesh.setColorAt(i, new THREE.Color(1, 1, 1));
       this.meshes.set(k, mesh);
       this.group.add(mesh);
+    }
+    // Autos further off than AUTO_NEAR are drawn plainer.
+    const na = counts.get('auto') ?? 0;
+    if (na) {
+      this.autoFar = new THREE.InstancedMesh(autoRickshaw('far'), mat, na);
+      this.autoFar.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      this.autoFar.castShadow = true;
+      this.autoFar.receiveShadow = true;
+      this.autoFar.frustumCulled = false;
+      for (let i = 0; i < na; i++) this.autoFar.setColorAt(i, new THREE.Color(1, 1, 1));
+      this.group.add(this.autoFar);
+    }
+  }
+
+  /** Puts the stop lines on the routes that cross them (within 4 m, running the same way). */
+  setStops(stops: { x: number; z: number; h: number; phase: 0 | 1 }[]): void {
+    for (const r of this.routes) {
+      r.stops = [];
+      for (const st of stops) {
+        for (let i = 1; i < r.pts.length; i++) {
+          const a = r.pts[i - 1];
+          const b = r.pts[i];
+          const dx = b[0] - a[0];
+          const dz = b[1] - a[1];
+          const l2 = dx * dx + dz * dz || 1;
+          const t = Math.max(0, Math.min(1, ((st.x - a[0]) * dx + (st.z - a[1]) * dz) / l2));
+          const d = Math.hypot(a[0] + dx * t - st.x, a[1] + dz * t - st.z);
+          if (d < 4 && Math.abs(wrapA(Math.atan2(dx, dz) - st.h)) < 0.6) {
+            r.stops.push({ s: r.cum[i - 1] + (r.cum[i] - r.cum[i - 1]) * t, phase: st.phase });
+            break;
+          }
+        }
+      }
     }
   }
 
@@ -802,63 +944,144 @@ export class MiraTraffic {
     return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
   }
 
+  private cell(x: number, z: number): number {
+    return Math.floor(x / 24) * 100003 + Math.floor(z / 24);
+  }
+
+  /**
+   * Distance to the nearest vehicle ahead of (x, z, heading h) within a corridor of half width
+   * `half` (local), leaving out those that are giving way to it (it is in front of them).
+   */
+  ahead(x: number, z: number, h: number, range: number, half: number, len = 2.6): number {
+    let best = Infinity;
+    for (const u of this.vehicles) {
+      const dx = u.x - x;
+      const dz = u.z - z;
+      if (dx * dx + dz * dz > (range + 12) ** 2) continue;
+      const along = inFront(x, z, h, half, u.x, u.z, u.h, HALF[u.kind], LEN[u.kind], range + LEN[u.kind] / 2);
+      if (along < 0) continue;
+      if (inFront(u.x, u.z, u.h, HALF[u.kind], x, z, h, half, len, 32) >= 0) continue;
+      const dh = Math.abs(Math.sin(wrapA(u.h - h)));
+      best = Math.min(best, along - (LEN[u.kind] / 2) * (1 - dh) - HALF[u.kind] * dh - len / 2);
+    }
+    return best;
+  }
+
+  /** No vehicle within r of the point now or (going as they go) in the next `t` seconds. */
+  clear(x: number, z: number, r: number, t: number): boolean {
+    for (const u of this.vehicles) {
+      const dx = u.x - x;
+      const dz = u.z - z;
+      if (dx * dx + dz * dz > (r + u.v * t + 12) ** 2) continue;
+      for (let k = 0; k <= 4; k++) {
+        const tt = (k / 4) * t;
+        const px = u.x + Math.sin(u.h) * u.v * tt;
+        const pz = u.z + Math.cos(u.h) * u.v * tt;
+        if (Math.hypot(px - x, pz - z) < r + LEN[u.kind] / 2) return false;
+      }
+    }
+    return true;
+  }
+
+  /** Vehicles near a point (local), for the street sounds. */
+  nearby(p: { x: number; z: number }, r: number): { x: number; z: number; speed: number; kind: string }[] {
+    const out: { x: number; z: number; speed: number; kind: string }[] = [];
+    for (const u of this.vehicles) if ((u.x - p.x) ** 2 + (u.z - p.z) ** 2 < r * r) out.push({ x: u.x, z: u.z, speed: u.v, kind: u.kind });
+    return out;
+  }
+
   update(dt: number, camLocal: THREE.Vector3, visible: boolean): void {
     this.group.visible = visible;
     if (!visible) return;
-    // Follow the vehicle ahead in the same lane; slow for corners.
-    const byRoute = new Map<number, Veh[]>();
+    // Who is where (last frame's positions), for following across routes.
+    this.grid.clear();
     for (const v of this.vehicles) {
-      let l = byRoute.get(v.route);
-      if (!l) byRoute.set(v.route, (l = []));
+      const k = this.cell(v.x, v.z);
+      let l = this.grid.get(k);
+      if (!l) this.grid.set(k, (l = []));
       l.push(v);
     }
-    for (const [ri, list] of byRoute) {
-      const r = this.routes[ri];
-      list.sort((a, b) => a.s - b.s);
-      for (let i = 0; i < list.length; i++) {
-        const v = list[i];
-        let gap = Infinity;
-        for (let k = 1; k < list.length; k++) {
-          const u = list[(i + k) % list.length];
-          if (Math.abs(u.lane - v.lane) > 1.4) continue;
-          gap = (((u.s - v.s) % r.length) + r.length) % r.length - (LEN[u.kind] + LEN[v.kind]) / 2;
-          break;
+    for (const v of this.vehicles) {
+      const r = this.routes[v.route];
+      const dx0 = Math.sin(v.h);
+      const dz0 = Math.cos(v.h);
+      let gap = Infinity;
+      const ci = Math.floor(v.x / 24);
+      const cj = Math.floor(v.z / 24);
+      for (let i = ci - 1; i <= ci + 1; i++)
+        for (let j = cj - 1; j <= cj + 1; j++) {
+          const l = this.grid.get(i * 100003 + j);
+          if (!l) continue;
+          for (const u of l) {
+            if (u === v || Math.abs(wrapA(u.h - v.h)) > 0.9) continue;
+            const dx = u.x - v.x;
+            const dz = u.z - v.z;
+            const along = dx * dx0 + dz * dz0;
+            if (along <= 0 || along > 32) continue;
+            if (Math.abs(dx * dz0 - dz * dx0) > HALF[u.kind] + HALF[v.kind] + 0.2) continue;
+            // Converging, each in front of the other: the one with the higher number gives way.
+            if (v.id < u.id && inFront(u.x, u.z, u.h, HALF[u.kind], v.x, v.z, v.h, HALF[v.kind], LEN[v.kind], 32) >= 0) continue;
+            gap = Math.min(gap, along - (LEN[u.kind] + LEN[v.kind]) / 2);
+          }
         }
-        const h0 = this.at(r, v.s, 0).h;
-        const h1 = this.at(r, v.s + 12, 0).h;
-        let dh = Math.abs(h1 - h0);
-        if (dh > Math.PI) dh = Math.PI * 2 - dh;
-        let target = v.want * Math.max(0.3, 1 - dh * 0.9);
-        if (gap < 2.5) target = 0;
-        else if (gap < 2.5 + v.v * 1.6) target = Math.min(target, (gap - 2.5) / 1.6);
-        const acc = target > v.v ? 1.6 : 4.5;
-        v.v += Math.sign(target - v.v) * Math.min(Math.abs(target - v.v), acc * dt);
-        v.s += v.v * dt;
-        if (v.s > r.length) v.s -= r.length;
+      for (const o of this.obstacles) {
+        const dx = o.x - v.x;
+        const dz = o.z - v.z;
+        const along = dx * dx0 + dz * dz0;
+        if (along <= 0 || along > 32) continue;
+        const dh = Math.abs(Math.sin(wrapA(o.h - v.h)));
+        const reach = o.half * (1 - dh) + (o.len / 2) * dh;
+        if (Math.abs(dx * dz0 - dz * dx0) > reach + HALF[v.kind] + 0.25) continue;
+        gap = Math.min(gap, along - LEN[v.kind] / 2 - (o.len / 2) * (1 - dh) - o.half * dh);
       }
+      // Red (or amber, when there is room to stop) at a stop line ahead.
+      if (this.signal)
+        for (const st of r.stops) {
+          const ds = (((st.s - v.s) % r.length) + r.length) % r.length;
+          if (ds > 45 || ds < LEN[v.kind] / 2 - 0.5) continue;
+          const light = this.signal.state(st.phase);
+          if (light === 0 || (light === 1 && ds - LEN[v.kind] / 2 > (v.v * v.v) / 7 + 1)) gap = Math.min(gap, ds - LEN[v.kind] / 2 - 0.5 + 2.5);
+        }
+      const h0 = this.at(r, v.s, 0).h;
+      const h1 = this.at(r, v.s + 12, 0).h;
+      let dh = Math.abs(h1 - h0);
+      if (dh > Math.PI) dh = Math.PI * 2 - dh;
+      let target = v.want * Math.max(0.3, 1 - dh * 0.9);
+      if (gap < 2.5) target = 0;
+      else if (gap < 2.5 + v.v * 1.6) target = Math.min(target, (gap - 2.5) / 1.6);
+      const acc = target > v.v ? 1.6 : 4.5;
+      v.v += Math.sign(target - v.v) * Math.min(Math.abs(target - v.v), acc * dt);
+      v.s += v.v * dt;
+      if (v.s > r.length) v.s -= r.length;
     }
     const idx = new Map<Kind, number>();
+    let nFar = 0;
     const R = this.riders;
     R.begin();
     for (const v of this.vehicles) {
       const r = this.routes[v.route];
       const p = this.at(r, v.s, v.lane);
-      const mesh = this.meshes.get(v.kind)!;
-      const i = idx.get(v.kind) ?? 0;
-      idx.set(v.kind, i + 1);
+      v.x = p.x;
+      v.z = p.z;
+      v.h = p.h;
+      const d2 = (p.x - camLocal.x) ** 2 + (p.z - camLocal.z) ** 2;
+      const far = v.kind === 'auto' && this.autoFar && d2 > AUTO_NEAR * AUTO_NEAR;
+      const mesh = far ? this.autoFar! : this.meshes.get(v.kind)!;
+      const i = far ? nFar++ : (idx.get(v.kind) ?? 0);
+      if (!far) idx.set(v.kind, i + 1);
       this.m.copy(mat4(p.x, -0.42, p.z, p.h));
       mesh.setMatrixAt(i, this.m);
       mesh.setColorAt(i, v.color);
-      if ((p.x - camLocal.x) ** 2 + (p.z - camLocal.z) ** 2 > 150 * 150) continue;
+      if (d2 > 150 * 150) continue;
       const s = Math.sin(p.h);
       const c = Math.cos(p.h);
-      const put = (lx: number, y: number, lz: number, look: Look) => R.put(look, p.x + c * lx + s * lz, -0.42 + y, p.z - s * lx + c * lz, p.h, 0, 0, 1);
+      const put = (lx: number, y: number, lz: number, look: Look, pose: number) => R.put(look, p.x + c * lx + s * lz, -0.42 + y, p.z - s * lx + c * lz, p.h, 0, 0, pose);
       if (v.kind === 'bike' || v.kind === 'scooter') {
-        put(0, 0.36, -0.15, v.riders[0]);
-        if (v.riders[1]) put(0, 0.4, -0.62, v.riders[1]);
+        put(0, 0.36, -0.15, v.riders[0], POSE.drive);
+        if (v.riders[1]) put(0, 0.4, -0.62, v.riders[1], POSE.sit);
       } else if (v.kind === 'auto') {
-        put(0, 0.36, 0.35, v.riders[0]);
-        v.riders.slice(1).forEach((l, k) => put(k ? 0.3 : -0.3, 0.33, -0.25, l));
+        put(0, 0.27, 0.36, v.riders[0], POSE.drive);
+        v.riders.slice(1).forEach((l, k) => put(k ? 0.3 : -0.3, 0.24, -0.76, l, POSE.sit));
       }
     }
     R.end();
@@ -866,6 +1089,11 @@ export class MiraTraffic {
       mesh.count = idx.get(k) ?? 0;
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
+    if (this.autoFar) {
+      this.autoFar.count = nFar;
+      this.autoFar.instanceMatrix.needsUpdate = true;
+      if (this.autoFar.instanceColor) this.autoFar.instanceColor.needsUpdate = true;
     }
   }
 }

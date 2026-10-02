@@ -5,7 +5,7 @@ import { flatPolygon } from '../route/Path2';
 import { heritageLamp, twinArmLamp, vendorCart, dustbin, type PropGeo } from '../route/Props';
 import type { TreeSpot } from '../city/Trees';
 import { FRONT, F } from './MiraFront';
-import { autoRickshaw, carGeo, mbmtBus, tempo, twoWheeler } from './MiraVehicles';
+import { autoRickshaw, carGeo, mbmtBus, tempo, twoWheelerLow } from './MiraVehicles';
 import { FOOTPATH, GROUND, PLAZA, ROAD, V3, beam, lamp, mat4, raise, sign, solid, wall, type MiraCtx } from './MiraCtx';
 
 /**
@@ -33,6 +33,8 @@ export interface OsmWay {
   id: number;
   tags: Record<string, string>;
   pts: Pt[];
+  /** From the extract south-east of the station (the auto ride's streets). */
+  ext?: boolean;
 }
 
 export interface MiraStreets {
@@ -50,7 +52,7 @@ export interface MiraStreets {
   meshes: THREE.Object3D[];
 }
 
-const inPoly = (pts: Pt[], x: number, z: number) => {
+export const inPoly = (pts: Pt[], x: number, z: number) => {
   let c = false;
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
     const [xi, zi] = pts[i];
@@ -78,7 +80,7 @@ const nayaZ = (x: number) => {
   return NAYA[0][1];
 };
 
-const segDist = (x: number, z: number, a: Pt, b: Pt) => {
+export const segDist = (x: number, z: number, a: Pt, b: Pt) => {
   const dx = b[0] - a[0];
   const dz = b[1] - a[1];
   const l2 = dx * dx + dz * dz || 1;
@@ -87,7 +89,7 @@ const segDist = (x: number, z: number, a: Pt, b: Pt) => {
 };
 
 /** Flat ribbon along a polyline between offsets o0..o1 (left +), mitred, world-planar UVs. */
-function ribbon(pts: Pt[], o0: number, o1: number, y: number, extend = 0): THREE.BufferGeometry {
+export function ribbon(pts: Pt[], o0: number, o1: number, y: number, extend = 0): THREE.BufferGeometry {
   const P = pts.map((p) => [...p] as Pt);
   if (extend > 0 && P.length >= 2) {
     const e = (a: Pt, b: Pt): Pt => {
@@ -136,7 +138,7 @@ function ribbon(pts: Pt[], o0: number, o1: number, y: number, extend = 0): THREE
 }
 
 /** A vertical quad between two ground points, from y0 to y1 (kerb faces), UVs in metres along. */
-function face(a: Pt, b: Pt, y0: number, y1: number): THREE.BufferGeometry {
+export function face(a: Pt, b: Pt, y0: number, y1: number): THREE.BufferGeometry {
   const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute([a[0], y0, a[1], b[0], y0, b[1], b[0], y1, b[1], a[0], y0, a[1], b[0], y1, b[1], a[0], y1, a[1]], 3));
@@ -146,14 +148,14 @@ function face(a: Pt, b: Pt, y0: number, y1: number): THREE.BufferGeometry {
 }
 
 /** Adds a prop's buckets to the builder at matrix m. */
-function prop(c: MiraCtx, p: PropGeo, m: THREE.Matrix4): void {
+export function prop(c: MiraCtx, p: PropGeo, m: THREE.Matrix4): void {
   if (p.paint) c.gb.add('prop_paint', p.paint.clone().applyMatrix4(m));
   if (p.metal) c.gb.add('prop_metal', p.metal.clone().applyMatrix4(m));
   if (p.glow) c.gb.add('prop_glow', p.glow.clone().applyMatrix4(m));
 }
 
 /** Instanced static vehicles (one mesh per model), coloured per instance. */
-function instanced(geo: THREE.BufferGeometry, mat: THREE.Material, list: { x: number; y: number; z: number; h: number; c?: THREE.Color }[], shadows = true): THREE.InstancedMesh {
+export function instanced(geo: THREE.BufferGeometry, mat: THREE.Material, list: { x: number; y: number; z: number; h: number; c?: THREE.Color }[], shadows = true): THREE.InstancedMesh {
   const mesh = new THREE.InstancedMesh(geo, mat, Math.max(1, list.length));
   list.forEach((v, i) => {
     mesh.setMatrixAt(i, mat4(v.x, v.y, v.z, v.h));
@@ -166,8 +168,8 @@ function instanced(geo: THREE.BufferGeometry, mat: THREE.Material, list: { x: nu
   return mesh;
 }
 
-const BODY = ['#f2f2ef', '#c9ccce', '#8e9296', '#2a2d31', '#7a1d1d', '#1d3f7a', '#b7b09e', '#e8e4da', '#5a5f63'].map((c) => new THREE.Color(c));
-const BIKES = ['#161616', '#1c1c1c', '#7a1414', '#1b3d8a', '#5a5f63', '#dcdcd6', '#3b0f15', '#20262e'].map((c) => new THREE.Color(c));
+export const BODY = ['#f2f2ef', '#c9ccce', '#8e9296', '#2a2d31', '#7a1d1d', '#1d3f7a', '#b7b09e', '#e8e4da', '#5a5f63'].map((c) => new THREE.Color(c));
+export const BIKES = ['#161616', '#1c1c1c', '#7a1414', '#1b3d8a', '#5a5f63', '#dcdcd6', '#3b0f15', '#20262e'].map((c) => new THREE.Color(c));
 
 export function buildStreets(
   c: MiraCtx,
@@ -176,6 +178,8 @@ export function buildStreets(
   railLand: (x: number, z: number) => boolean,
   skywalkCols: Pt[],
   trees: (spots: TreeSpot[]) => THREE.Group,
+  /** Also dressed beyond the station's surroundings: the auto ride's streets (footpaths, lamps, lane markings). */
+  dressed: (x: number, z: number) => boolean = () => false,
 ): MiraStreets {
   const gb = c.gb;
   const rng = c.rng;
@@ -205,7 +209,7 @@ export function buildStreets(
   for (const e of ways) {
     const hw = e.tags.highway;
     if (!hw || e.tags.bridge || ['footway', 'steps', 'path', 'pedestrian', 'track', 'cycleway', 'corridor'].includes(hw)) continue;
-    if (!e.pts.some(([x, z]) => near(x, z, 520))) continue;
+    if (!e.pts.some(([x, z]) => near(x, z, 520) || dressed(x, z))) continue;
     const w = APPROACH.has(e.id) ? 8 : hw === 'secondary' ? 9.5 : hw === 'tertiary' ? 8 : hw === 'residential' ? 6.5 : hw === 'living_street' ? 5 : 5.5;
     // Split into runs off the railway land.
     let run: Pt[] = [];
@@ -238,9 +242,19 @@ export function buildStreets(
   // The approach loop's median (between its two carriageways), and the lot north of it.
   const zN = (x: number) => -42 + ((x - 72) * 4) / 110 + 4;
   const zS = (x: number) => -27 + ((x - 71) * 2) / 101 - 4;
-  const MED: Pt[] = [];
-  for (let x = 84; x <= 166; x += 4) MED.push([x, zN(x) + 0.4]);
-  for (let x = 166; x >= 84; x -= 4) MED.push([x, zS(x) - 0.4]);
+  // Its kerbs stand on the carriageways' edges (4 m off OSM 44427767's eastbound run and 1238879349),
+  // and its nose, chamfered, on the U-turn's (4 m east of the run up past the forecourt).
+  const medN = (x: number) => -42.4 + ((x - 72) * 4.4) / 109.9 + 4.03;
+  const medS = (x: number) => -27.3 + ((x - 71.4) * 2) / 100.3 - 4.03;
+  const NOSE = 75.9;
+  const MED: Pt[] = [
+    [NOSE, medS(NOSE) - 0.6],
+    [NOSE, medN(NOSE) + 0.6],
+    [NOSE + 0.6, medN(NOSE + 0.6)],
+  ];
+  for (let x = 80; x <= 166; x += 4) MED.push([x, medN(x)]);
+  for (let x = 166; x >= 80; x -= 4) MED.push([x, medS(x)]);
+  MED.push([NOSE + 0.6, medS(NOSE + 0.6)]);
   const LOT: Pt[] = [
     [190.3, -54.1],
     [182.1, -91.2],
@@ -265,6 +279,8 @@ export function buildStreets(
     const fw = r.cls === 'approach' ? 2.8 : r.cls === 'secondary' ? 2.6 : r.cls === 'tertiary' ? 2.2 : r.cls === 'residential' ? 1.7 : 1.5;
     const maxR = r.cls === 'service' || r.cls === 'living_street' ? 170 : 330;
     for (const side of [-1, 1]) {
+      // The approach is a one-way loop round its median: its inside (−1) is the median, or the turn.
+      if (r.cls === 'approach' && side < 0) continue;
       let cur: Pt[] = [];
       let acc = 0;
       const flushWalk = () => {
@@ -285,7 +301,8 @@ export function buildStreets(
           const t1 = ((k + 1) / steps) * len;
           const mx = a[0] + dx * (t0 + t1) * 0.5 + nx * (r.w / 2 + fw / 2);
           const mz = a[1] + dz * (t0 + t1) * 0.5 + nz * (r.w / 2 + fw / 2);
-          if (!near(mx, mz, maxR) || blocked(mx, mz) || onRoad(mx, mz, 0.4, ri) || blocked(mx - nx * fw * 0.5, mz - nz * fw * 0.5)) {
+          const along = near(mx, mz, maxR) || (r.cls !== 'service' && r.cls !== 'living_street' && dressed(mx, mz));
+          if (!along || blocked(mx, mz) || onRoad(mx, mz, 0.4, ri) || blocked(mx - nx * fw * 0.5, mz - nz * fw * 0.5)) {
             flushWalk();
             continue;
           }
@@ -299,7 +316,7 @@ export function buildStreets(
           raise(c, [p0, p1, q1, q0], FOOTPATH);
           cur.push([(p0[0] + q0[0]) / 2, (p0[1] + q0[1]) / 2]);
           acc += t1 - t0;
-          if (acc > 27 && (r.cls !== 'approach' || side < 0) && r.cls !== 'service' && r.cls !== 'living_street') {
+          if (acc > 27 && r.cls !== 'approach' && r.cls !== 'service' && r.cls !== 'living_street') {
             acc = 0;
             // The arm (prop +x) reaches out over the road (−n).
             lampSpots.push({ x: p0[0] + nx * 0.5, z: p0[1] + nz * 0.5, h: Math.atan2(nz, -nx) });
@@ -322,7 +339,7 @@ export function buildStreets(
       for (let t = 2; t + 3 < len; t += 8) {
         const x = a[0] + ((b[0] - a[0]) * (t + 1.5)) / len;
         const z = a[1] + ((b[1] - a[1]) * (t + 1.5)) / len;
-        if (!near(x, z, 420) || onRoad(x, z, -0.5, roads.indexOf(r))) continue;
+        if (!(near(x, z, 420) || dressed(x, z)) || onRoad(x, z, -0.5, roads.indexOf(r))) continue;
         paint(boxGeo(0.13, 0.01, 3).rotateY(Math.atan2(b[0] - a[0], b[1] - a[1])).translate(x, ROAD + 0.012, z));
       }
     }
@@ -408,7 +425,7 @@ export function buildStreets(
   // A goods tempo parked on the forecourt (as in the main-entrance photo).
   const tempoMesh = instanced(tempo(), c.M.prop_paint, [{ x: 45.5, y: PLAZA, z: -31.5, h: Math.PI - 0.25 }]);
   out.meshes.push(tempoMesh);
-  solid(c, 45.5, -31.5, 1.0, 2.5, -(Math.PI - 0.25), -1, 2.5);
+  solid(c, 45.5, -31.5, 1.0, 2.5, Math.PI - 0.25, -1, 2.5);
 
   // ---- The war memorial and the fountain (outside/0_1) ------------------------------------------
   buildMemorial(c, 47.5, -57.5);
@@ -471,8 +488,8 @@ export function buildStreets(
     }
     solid(c, 135, z, 43, 1.0, 0, -1, 1.3);
   }
-  out.meshes.push(instanced(twoWheeler(false), c.M.prop_paint, [...bikes, ...ledgeBikes.filter((_, i) => i % 2 === 0)], false));
-  out.meshes.push(instanced(twoWheeler(true), c.M.prop_paint, [...scooters, ...ledgeBikes.filter((_, i) => i % 2 === 1)], false));
+  out.meshes.push(instanced(twoWheelerLow(false), c.M.prop_paint, [...bikes, ...ledgeBikes.filter((_, i) => i % 2 === 0)], false));
+  out.meshes.push(instanced(twoWheelerLow(true), c.M.prop_paint, [...scooters, ...ledgeBikes.filter((_, i) => i % 2 === 1)], false));
   // Its fence, board and the attendant's booth.
   rail(V3(90, 0, -66.6), V3(148, 0, -66.6));
   rail(V3(154, 0, -66.6), V3(180, 0, -66.6));
@@ -494,14 +511,17 @@ export function buildStreets(
   out.spots.push(...[0, 1, 2, 3, 4, 5].map((k) => ({ kind: 'bus' as const, x: 101.5 + k * 1.1 + rng.range(-0.2, 0.2), z: -46.8 + rng.range(-0.3, 0.2), y: FOOTPATH, h: rng.range(-0.5, 0.5) })));
   const bus = instanced(mbmtBus(), c.M.prop_paint, [{ x: 108, y: ROAD, z: -42.4, h: Math.PI / 2 - 0.035 }]);
   out.meshes.push(bus);
-  solid(c, 108, -42.4, 6, 1.35, -(Math.PI / 2 - 0.035), -1, 3.2);
+  solid(c, 108, -42.4, 1.35, 6, Math.PI / 2 - 0.035, -1, 3.2);
 
   // ---- Parked cars in front of the shops ----------------------------------------------------------
   const cars: Record<string, { x: number; y: number; z: number; h: number; c?: THREE.Color }[]> = { car: [], suv: [], cab: [], taxi: [] };
   for (let x = 82; x < 164; x += rng.range(6, 12)) {
     const kind = rng.pick(['car', 'car', 'suv', 'cab', 'taxi']);
     const z = -24.0 + ((x - 71) * 2) / 101;
-    cars[kind].push({ x, y: ROAD, z, h: -Math.PI / 2 + rng.range(-0.05, 0.05), c: kind === 'taxi' ? new THREE.Color(0.08, 0.08, 0.08) : rng.pick(BODY) });
+    const car = { x, y: ROAD, z, h: -Math.PI / 2 + rng.range(-0.05, 0.05), c: kind === 'taxi' ? new THREE.Color(0.08, 0.08, 0.08) : rng.pick(BODY) };
+    // In front of the shopping centre the kerb is the autos' (MiraStationShops); cars park by the junction.
+    if (x < 149) continue;
+    cars[kind].push(car);
     solid(c, x, z, 2.2, 0.95, 0, -1, 1.6);
   }
   for (const k of Object.keys(cars)) if (cars[k].length) out.meshes.push(instanced(carGeo(k as 'car', k === 'taxi' ? [0.95, 0.75, 0.1] : [0.9, 0.9, 0.9]), c.M.prop_paint, cars[k]));
@@ -648,12 +668,12 @@ export function buildStreets(
 }
 
 /** A thin horizontal strip between two ground points (edging, ledges). */
-function beamXZ(a: Pt, b: Pt, w: number, y: number, h = 0.03): THREE.BufferGeometry {
+export function beamXZ(a: Pt, b: Pt, w: number, y: number, h = 0.03): THREE.BufferGeometry {
   return beam(V3(a[0], y, a[1]), V3(b[0], y, b[1]), w, h);
 }
 
 /** Roadside light: galvanised pole, curved arm over the road (prop +x) ⚠. */
-function streetLight(): PropGeo {
+export function streetLight(): PropGeo {
   return twinArmLamp(false, 9);
 }
 
@@ -683,9 +703,9 @@ function shed(c: MiraCtx, x: number, z: number, w: number, d: number, ry: number
   gb.add('prop_paint', tint(boxGeo(w * 0.7, 0.08, 0.4).translate(0, 0.45, -d / 2 + 0.3), 0.3, 0.3, 0.3).applyMatrix4(m));
 }
 
-function busShelter(c: MiraCtx, x: number, z: number): void {
+export function busShelter(c: MiraCtx, x: number, z: number, ry = 0): void {
   const gb = c.gb;
-  const m = mat4(x, FOOTPATH, z, 0);
+  const m = mat4(x, FOOTPATH, z, ry);
   // Curved steel ribs, a polycarbonate roof, a bench, the red board.
   for (let k = 0; k < 4; k++) {
     const u = -3 + k * 2;
@@ -700,11 +720,13 @@ function busShelter(c: MiraCtx, x: number, z: number): void {
   gb.add('prop_metal', tint(boxGeo(5.5, 0.05, 0.45).translate(0, 0.45, -0.6), 0.65, 0.67, 0.68).applyMatrix4(m));
   gb.add('prop_paint', tint(boxGeo(6.2, 1.0, 0.03).translate(0, 1.2, -0.95), 0.75, 0.78, 0.8).applyMatrix4(m));
   sign(c, c.signs.busStop, 2.2, 0.72, mat4(0, 2.35, 1.35, Math.PI).premultiply(m), { back: true });
-  solid(c, x, z - 0.95, 3.2, 0.2, 0, -1, 2.5);
+  const bx = x - Math.sin(ry) * 0.95;
+  const bz = z - Math.cos(ry) * 0.95;
+  solid(c, bx, bz, 3.2, 0.2, -ry, -1, 2.5);
 }
 
 /** A lit hoarding on its frame: on short legs down to `base` (a roof), or on one tall pole. */
-function hoarding(c: MiraCtx, at: Pt, y: number, w: number, h: number, ry: number, rect: import('../../gfx/Signage').AtlasRect, base: number, pole = false): void {
+export function hoarding(c: MiraCtx, at: Pt, y: number, w: number, h: number, ry: number, rect: import('../../gfx/Signage').AtlasRect, base: number, pole = false): void {
   const gb = c.gb;
   const m = mat4(at[0], y, at[1], ry);
   gb.add('signsLit', signQuad(rect, w, h).translate(0, h / 2, 0.08).applyMatrix4(m));
@@ -729,12 +751,22 @@ function hoarding(c: MiraCtx, at: Pt, y: number, w: number, h: number, ry: numbe
   }
 }
 
+export interface ShopOpts {
+  /** A named board (another atlas, under that material key) instead of a station-atlas shop. */
+  board?: { rect: import('../../gfx/Signage').AtlasRect; key: string };
+  /** Which interior shows through the shutters (0 grocery, 1 clothes, 2 sweets, 3 phones). */
+  interior?: number;
+  open?: boolean;
+  /** A corrugated tin awning (the station side and the main roads), or none. */
+  awning?: 'tin' | 'none';
+}
+
 /** One shop unit on a building face: shutter box, fascia board, lit interior, goods, awning. */
-function shopfront(c: MiraCtx, x: number, z: number, h: number, w: number, k: number): void {
+export function shopfront(c: MiraCtx, x: number, z: number, h: number, w: number, k: number, opts: ShopOpts = {}): void {
   const gb = c.gb;
   const rng = c.rng;
   const m = mat4(x, FOOTPATH, z, h);
-  const closed = rng.chance(0.14);
+  const closed = opts.open ? false : rng.chance(0.14);
   if (closed) {
     gb.add('shutter', boxGeo(w - 0.2, 2.85, 0.05).translate(0, 1.43, 0.04).applyMatrix4(m));
   } else {
@@ -746,7 +778,7 @@ function shopfront(c: MiraCtx, x: number, z: number, h: number, w: number, k: nu
     ]);
     const g = new THREE.PlaneGeometry(w - 0.2, 2.85);
     const uv = g.attributes.uv as THREE.BufferAttribute;
-    const vk = k % 4;
+    const vk = opts.interior ?? k % 4;
     for (let i = 0; i < uv.count; i++) uv.setX(i, (vk + 0.02 + uv.getX(i) * 0.96) / 5);
     gb.add('shopGlow', tint(g.translate(0, 1.43, 0.03), tintC[0], tintC[1], tintC[2]).applyMatrix4(m));
     const p = V3(0, 0, 2).applyMatrix4(m);
@@ -759,11 +791,22 @@ function shopfront(c: MiraCtx, x: number, z: number, h: number, w: number, k: nu
   }
   gb.add('shutter', boxGeo(w - 0.1, 0.32, 0.32).translate(0, 3.02, 0.16).applyMatrix4(m));
   const shops = c.signs.shops;
-  const rect = shops[k % shops.length];
+  const rect = opts.board?.rect ?? shops[k % shops.length];
   const bw = Math.min(w - 0.1, 5.2);
-  gb.add('signsLit', signQuad(rect, bw, bw / 4).translate(0, 3.25 + bw / 8 + 0.12, 0.16).applyMatrix4(m));
+  gb.add(opts.board?.key ?? 'signsLit', signQuad(rect, bw, bw / 4).translate(0, 3.25 + bw / 8 + 0.12, 0.16).applyMatrix4(m));
   gb.add('prop_paint', tint(boxGeo(bw + 0.08, bw / 4 + 0.08, 0.1).translate(0, 3.25 + bw / 8 + 0.12, 0.1), 0.15, 0.15, 0.15).applyMatrix4(m));
-  if (rng.chance(0.4)) {
+  if (opts.awning === 'tin') {
+    // Corrugated sheet on two brackets, sloping out over the footpath, rusted at the edge.
+    const col = [
+      [0.56, 0.46, 0.38],
+      [0.62, 0.64, 0.66],
+      [0.42, 0.55, 0.68],
+      [0.45, 0.56, 0.44],
+    ][k % 4];
+    gb.add('tin', tint(boxGeo(w + 0.15, 0.02, 1.45).rotateX(0.3).translate(0, 3.02, 0.72), col[0], col[1], col[2]).applyMatrix4(m));
+    gb.add('prop_paint', tint(boxGeo(w + 0.15, 0.05, 0.05).translate(0, 2.8, 1.4), col[0] * 0.6, col[1] * 0.5, col[2] * 0.45).applyMatrix4(m));
+    for (const e of [-w / 2 + 0.1, w / 2 - 0.1]) gb.add('prop_metal', tint(rodGeo(V3(e, 3.2, 0.02), V3(e, 2.85, 1.35), 0.015, 4), 0.3, 0.3, 0.3).applyMatrix4(m));
+  } else if (opts.awning !== 'none' && rng.chance(0.4)) {
     const col = rng.pick([
       [0.1, 0.35, 0.75],
       [0.85, 0.35, 0.1],

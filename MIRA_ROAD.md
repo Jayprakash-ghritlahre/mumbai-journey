@@ -17,6 +17,7 @@ Facts marked **⚠** are estimates or general knowledge, not taken from a source
 | `outside/3.jpeg`, `station_main_road.jpg`, video still 04-37-19 | MBMT buses and bus stop, shopfronts, poles and cables, apartment blocks |
 | `mira-road-station-train-schedule-board-mumbai-local.jpg` | The all-platform board: Hindi header grid, one block per platform, yellow and cyan rows, red clock. **It confirms the platform pattern: PF 1 Virar, PF 2 Andheri/Borivali, PF 3 Virar, PF 4 Churchgate (fast).** |
 | `mira-road-station-platform3-…jpg`, `…platform-4-sign-board.jpg` | Single-line green platform indicators ("C 01:17 F 01") and their printed Hindi header; blue-painted canopy undersides |
+| `miraroad_exit.png` (assets/) | The exit board at the south end of the PF 2/3 island, between the two tracks: "मीरा रोड / मीरा रोड MIRA ROAD" on yellow, in a brown steel frame on two posts under a little hood |
 | `2.jpeg`, `11.jpeg`, `12.jpeg`, `9.jpeg` | Yellow corrugated FOB board, blue "3"-style platform numbers, the old diamond board with "Caution 25000 volts", fences between tracks, tactile strips, twin steel bins |
 | OpenStreetMap (`data/mira-road.raw.json`, ODbL) | Platforms, tracks, the deck, FOBs and skywalk with every flight of stairs, the forecourt polygon, the auto-stand lot, the approach road loop, Naya Nagar / Shrikant Dhadwe / Poonam Sagar / Mira Road streets, 480 building footprints |
 
@@ -40,8 +41,9 @@ Photos are used for reconstruction only, never as textures. Every surface, sign 
   All 22 OSM flights of stairs are built. From the hall you reach every platform: via the FOB for
   PF 1–3; PF 4 is at hall level.
 - **Forecourt:** the war memorial and fountain on the cobbles, bollards along the street edge
-  with three gaps. The approach road loops round a planted median. The auto stand and bike lot are
-  north of it, and the MBMT bus stop is on its north side.
+  with three gaps. The approach road loops round a planted median, kerbed on both carriageways'
+  edges, its nose at the U-turn by the forecourt; footpaths run only on the loop's outside. The
+  auto stand and bike lot are north of it, and the MBMT bus stop is on its north side.
 
 ## 3. What is built
 
@@ -63,6 +65,9 @@ Photos are used for reconstruction only, never as textures. Every surface, sign 
   - blue PF 1–4 numbers near each face;
   - green single-line indicators per platform (live);
   - yellow मीरा रोड boards facing the tracks, and diamond boards with the caution plate;
+  - past the south end of the PF 2/3 island's canopy, between the tracks, the exit board in its
+    steel frame, facing the trains as they pull out towards Churchgate (the same boards as
+    Borivali and Dadar, `journey/StationBoards.ts`);
   - two clocks per platform, steel benches, twin bins, tea stalls, water coolers;
   - the tactile band and the yellow guide strip;
   - fences between the tracks, and overhead-line portals (the line's own portals stopped at the

@@ -48,13 +48,20 @@ void main() {
   vec3 sunFlat = normalize(vec3(uSunDir.x, 0.0, uSunDir.z) + 1e-5);
   float side = 0.5 + 0.5 * dot(normalize(vec3(d.x, 0.0, d.z) + 1e-5), sunFlat);
   vec3 hor = mix(uHorizonAnti, uHorizon, smoothstep(0.0, 1.0, side * side));
-  vec3 sky = mix(hor, uZenith, pow(th, 0.42));
+  // With the sun low the air is clear: the warm band hugs the horizon and the sky above it is blue.
+  float low = clamp((uHazeGlow - 0.6) / 1.2, 0.0, 1.0);
+  float up = mix(pow(th, 0.42), 1.0 - exp(-th * 6.5), low);
+  vec3 sky = mix(hor, uZenith, up);
   sky += hor * 0.2 * exp(-th * 16.0);
 
   float g1 = pow(max(mu, 0.0), 6.0);
   float g2 = pow(max(mu, 0.0), 90.0);
   float g3 = pow(max(mu, 0.0), 900.0);
   vec3 glow = uSunColor * (g1 * 0.2 + g2 * 0.55 + g3 * 1.6) * uHazeGlow * (0.3 + 0.7 * exp(-th * 2.5));
+  // A low sun: a warm veil round it and along the horizon beneath it, added on top, so the sky
+  // between the gold and the blue stays luminous instead of averaging to grey.
+  float veil = pow(max(mu, 0.0), 5.0) * pow(1.0 - th, 6.0);
+  glow += uSunColor * veil * low * 0.35;
   sky += glow * (1.0 - uNight) * smoothstep(-0.12, 0.02, uSunDir.y);
 
   if (h < 0.0) sky = mix(hor * 0.85, uGround, smoothstep(0.0, 0.2, -h));

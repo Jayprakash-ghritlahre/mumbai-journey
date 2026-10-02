@@ -20,6 +20,9 @@ import { PLATFORMS, buildPlatforms } from '../miraroad/MiraPlatforms';
 import { buildDeck } from '../miraroad/MiraDeck';
 import { buildStreets, type OsmWay } from '../miraroad/MiraStreets';
 import { FACES, MiraPeople, MiraService, MiraTraffic } from '../miraroad/MiraLife';
+import { buildAutoRoute, type AutoRoute } from '../miraroad/AutoRoute';
+import { buildFirstMile, type FirstMile } from '../miraroad/MiraFirstMile';
+import { segDist } from '../miraroad/MiraStreets';
 
 /**
  * Mira Road station and its east side (MIRA_ROAD.md), from OpenStreetMap (data/mira-road.osm.json,
@@ -37,6 +40,8 @@ interface OsmEl {
   id: number;
   tags?: Record<string, string>;
   geometry?: { lat: number; lon: number }[];
+  /** From the extract south-east of the station (Shanti Nagar, Poonam Sagar Road). */
+  ext?: number;
 }
 
 const K = Math.PI / 180;
@@ -80,6 +85,8 @@ export interface MiraRoad {
   interiorFactor(p: THREE.Vector3): number;
   /** Place name for the HUD at a world position. */
   placeAt(p: THREE.Vector3): [string, string] | null;
+  /** The auto ride to the station (AUTO_RIDE.md): its route, streets, traffic and people. */
+  auto: { route: AutoRoute; streets: FirstMile; traffic: MiraTraffic };
 }
 
 export async function buildMiraRoad(kit: CorridorKit, rail: Railway, world: Churchgate, base: string): Promise<MiraRoad> {
@@ -92,7 +99,8 @@ export async function buildMiraRoad(kit: CorridorKit, rail: Railway, world: Chur
   const rng = new RNG(1990);
   const path = rail.path;
   const dm = rail.dMiraRoad;
-  const ways: OsmWay[] = osm.elements.filter((e) => e.type === 'way' && e.geometry).map((e) => ({ id: e.id, tags: e.tags ?? {}, pts: e.geometry!.map((g) => local(g.lat, g.lon)) }));
+  const ways: OsmWay[] = osm.elements.filter((e) => e.type === 'way' && e.geometry).map((e) => ({ id: e.id, tags: e.tags ?? {}, pts: e.geometry!.map((g) => local(g.lat, g.lon)), ext: !!e.ext }));
+  const route = buildAutoRoute(ways);
   const proj = (x: number, z: number) => path.project(x + AX, z + AZ, dm - 1500, dm + 1500);
   const railLand = (x: number, z: number) => {
     const m = proj(x, z);
@@ -110,9 +118,10 @@ export async function buildMiraRoad(kit: CorridorKit, rail: Railway, world: Chur
   const boards = new MiraBoards(tf, timetable);
   const col = new CollisionWorld();
   col.baseHeight = GROUND;
-  const walk = new WalkSurface(AX - 420, AZ - 440, AX + 640, AZ + 460, 0.5, GROUND);
+  // Out to Shanti Nagar in the south-east (the auto ride).
+  const walk = new WalkSurface(AX - 420, AZ - 440, AX + 640, AZ + 600, 0.5, GROUND);
   col.surface = walk;
-  const av = new AmbientVolume(AX - 420, AZ - 440, AX + 640, AZ + 460, 1024);
+  const av = new AmbientVolume(AX - 420, AZ - 440, AX + 640, AZ + 600, 1024);
   const M: Record<string, THREE.Material> = {
     ...world.mats.m,
     ...kit.m,
@@ -166,6 +175,38 @@ export async function buildMiraRoad(kit: CorridorKit, rail: Railway, world: Chur
     [0.92, 0.96, 0.92],
     [1, 0.88, 0.86],
   ];
+  // Along the auto ride: pastel paint, homes on the ground floor of the lanes, shops on the roads.
+  const PASTELS: [number, number, number][] = [
+    [1, 0.93, 0.78],
+    [1, 0.86, 0.74],
+    [0.98, 0.84, 0.84],
+    [1, 0.95, 0.7],
+    [0.86, 0.95, 0.86],
+    [0.84, 0.9, 0.98],
+    [0.93, 0.92, 0.9],
+    [0.95, 0.88, 0.96],
+  ];
+  const mainSegs: { a: [number, number]; b: [number, number]; hw: number }[] = [];
+  for (const e of ways) {
+    const hw = e.tags.highway;
+    if (hw !== 'secondary' && hw !== 'tertiary' && hw !== 'residential') continue;
+    if (!e.pts.some(([x, z]) => route.near(x, z, 120))) continue;
+    for (let i = 1; i < e.pts.length; i++) mainSegs.push({ a: e.pts[i - 1], b: e.pts[i], hw: hw === 'secondary' ? 4.75 : hw === 'tertiary' ? 4 : 3.25 });
+  }
+  const facesRoad = (p: [number, number][]) => p.some((q, i) => {
+    const r = p[(i + 1) % p.length];
+    const mx = (q[0] + r[0]) / 2;
+    const mz = (q[1] + r[1]) / 2;
+    return mainSegs.some((s) => segDist(mx, mz, s.a, s.b) < s.hw + 9);
+  });
+  const rngExt = new RNG(2613);
+  // Shanti Shopping Centre facing the approach, and the bank on the junction's corner: dressed as they are (MiraStationShops).
+  const SHOPPING_CENTRE = 1063810561;
+  const BANK_CORNER = 1393743724;
+  let stationBlock: [number, number][] | null = null;
+  let bankCorner: [number, number][] | null = null;
+  const allPolys: [number, number][][] = [];
+  const routePolys: [number, number][][] = [];
   const shopPolys: [number, number][][] = [];
   for (const e of ways) {
     const t = e.tags;
@@ -184,6 +225,7 @@ export async function buildMiraRoad(kit: CorridorKit, rail: Railway, world: Chur
     if (railLand(cx, cz) || inHall(cx, cz)) continue;
     const [u, v] = toFrame(cx, cz);
     if (u > FRONT.hallU0 - 3 && u < FRONT.hallU1 + 8 && v > FRONT.hallV0 - 2 && v < 40) continue;
+    allPolys.push(p);
     let fp = p.flatMap(([x, z]) => [x, z]);
     let area = 0;
     for (let i = 0; i < p.length; i++) {
@@ -197,25 +239,46 @@ export async function buildMiraRoad(kit: CorridorKit, rail: Railway, world: Chur
     }
     const lv = parseFloat(t['building:levels'] ?? '');
     const hTag = parseFloat(t.height ?? '');
-    const floors = Number.isFinite(lv) ? lv : Number.isFinite(hTag) ? Math.max(1, Math.round(hTag / 3.1)) : rng.int(4, 7);
+    // The station's own buildings keep their draws (rng); the extension draws its own.
+    const r = e.ext ? rngExt : rng;
+    const floors = Number.isFinite(lv) ? lv : Number.isFinite(hTag) ? Math.max(1, Math.round(hTag / 3.1)) : r.int(4, 7);
     const tall = floors > 10;
     const near = Math.hypot(cx - 50, cz + 50) < 280;
+    const onRoute = !near && p.some(([x, z]) => route.near(x, z, 55));
+    const style = tall ? r.pick([FACADE.grille, FACADE.glass]) : r.pick([FACADE.grille, FACADE.grille, FACADE.deco, FACADE.decoBalcony, FACADE.chawl]);
+    const shopGround = r.chance(0.6);
+    const tnt = r.pick(TINTS);
+    const seed = r.range(0, 100);
+    const chajjas = r.chance(0.6);
+    const sector = onRoute || !!e.ext;
     batch.add({
       fp,
       height: floors * 3.1 + 1,
       floorH: 3.1,
       groundH: 4,
-      style: tall ? rng.pick([FACADE.grille, FACADE.glass]) : rng.pick([FACADE.grille, FACADE.grille, FACADE.deco, FACADE.decoBalcony, FACADE.chawl]),
-      groundStyle: rng.chance(0.6) ? FACADE.shop : FACADE.grille,
-      tint: rng.pick(TINTS),
-      seed: rng.range(0, 100),
-      chajjas: rng.chance(0.6),
+      // Shanti Nagar's blocks: grilled windows and balconies, rarely the old styles.
+      style: sector && !tall && style === FACADE.chawl ? FACADE.decoBalcony : style,
+      groundStyle: sector ? (facesRoad(p) ? FACADE.shop : FACADE.grille) : shopGround ? FACADE.shop : FACADE.grille,
+      // The shopping centre's weathered salmon-pink plaster (Station Road photos).
+      tint: e.id === SHOPPING_CENTRE ? [1.0, 0.74, 0.68] : sector ? PASTELS[e.id % PASTELS.length] : tnt,
+      seed,
+      chajjas,
       parapet: 1,
-      detail: near ? 1 : 0,
+      detail: near || onRoute ? 1 : 0,
       baseY: GROUND,
     });
+    if (onRoute) {
+      routePolys.push(p);
+      for (let i = 0; i < p.length; i++) {
+        const [x0, z0] = p[i];
+        const [x1, z1] = p[(i + 1) % p.length];
+        col.addWall(x0 + AX, z0 + AZ, x1 + AX, z1 + AZ, 0.4);
+      }
+    }
+    if (e.id === SHOPPING_CENTRE) stationBlock = p;
+    if (e.id === BANK_CORNER) bankCorner = p;
     if (near) {
-      shopPolys.push(p);
+      if (e.id !== SHOPPING_CENTRE && e.id !== BANK_CORNER) shopPolys.push(p);
       for (let i = 0; i < p.length; i++) {
         const [x0, z0] = p[i];
         const [x1, z1] = p[(i + 1) % p.length];
@@ -227,8 +290,11 @@ export async function buildMiraRoad(kit: CorridorKit, rail: Railway, world: Chur
   group.add(batch.details.build(kit.m as Record<string, THREE.Material>, { castShadow: false }));
 
   // ---- Streets, the forecourt and everything on them ----------------------------------------------
-  const streets = buildStreets(c, ways, shopPolys, railLand, deck.skywalkCols, (spots) => kit.trees(spots, 77));
+  const streets = buildStreets(c, ways, shopPolys, railLand, deck.skywalkCols, (spots) => kit.trees(spots, 77), (x, z) => route.near(x, z, 60));
   for (const m of streets.meshes) group.add(m);
+  // ---- The auto ride's streets (AUTO_RIDE.md) ---------------------------------------------------------
+  const firstMile = buildFirstMile(c, { ways, route, buildings: allPolys, routeBuildings: routePolys, trees: (spots) => kit.trees(spots, 79), tf, mats: world.mats, stationBlock, bankCorner });
+  for (const m of firstMile.meshes) group.add(m);
 
   // Town ground: between the railway walls and 700 m out, both sides.
   for (const side of [-1, 1]) {
@@ -297,8 +363,8 @@ export async function buildMiraRoad(kit: CorridorKit, rail: Railway, world: Chur
       return new THREE.Vector3(x, TOP, z);
     },
     gates: streets.gates,
-    walks: streets.walks,
-    spots: streets.spots,
+    walks: [...streets.walks, ...firstMile.walks],
+    spots: [...streets.spots, ...firstMile.spots],
     autoHeads: streets.autoHeads,
     seats: pfs.seats,
     stalls: pfs.stalls,
@@ -317,7 +383,9 @@ export async function buildMiraRoad(kit: CorridorKit, rail: Railway, world: Chur
     hallY: TOP,
   });
   group.add(people.group);
-  const traffic = new MiraTraffic(av, M.prop_paint, streets.routes);
+  const traffic = new MiraTraffic(av, M.prop_paint, [...streets.routes, ...firstMile.routes]);
+  traffic.signal = firstMile.signal;
+  traffic.setStops(firstMile.signal.stops);
   group.add(traffic.group);
   let lastHour = -1;
   let populated = false;
@@ -349,6 +417,8 @@ export async function buildMiraRoad(kit: CorridorKit, rail: Railway, world: Chur
       }
       lastHour = hour;
       const near = camLocal.lengthSq() < 420 * 420;
+      const onRoute = route.near(camLocal.x, camLocal.z, 160);
+      firstMile.signal.update(dt);
       if (near) boards.update(hour);
       // Clock hands.
       const m = new THREE.Matrix4();
@@ -371,7 +441,7 @@ export async function buildMiraRoad(kit: CorridorKit, rail: Railway, world: Chur
       hands.instanceMatrix.needsUpdate = true;
       service.update(hour, mira.holdLine1);
       people.update(dt, hour, camLocal, mira.rideTrain);
-      traffic.update(dt, camLocal, near);
+      traffic.update(dt, camLocal, near || onRoute);
     },
     interiorFactor(p) {
       const sky = av.sampleSky(p.x, p.z);
@@ -394,6 +464,7 @@ export async function buildMiraRoad(kit: CorridorKit, rail: Railway, world: Chur
       if (inHall(lx, lz)) return ['Mira Road · booking hall', 'मिरा रोड · तिकीट घर'];
       return ['Mira Road (East)', 'मिरा रोड (पूर्व)'];
     },
+    auto: { route, streets: firstMile, traffic },
   };
   service.onArrive = (pf, doors) => people.trainArrived(pf, doors, lastHour);
   return mira;

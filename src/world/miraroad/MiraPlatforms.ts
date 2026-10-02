@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { boxGeo, rodGeo, tint } from '../../gfx/GeoBuilder';
 import { signQuad, type AtlasRect } from '../../gfx/Signage';
 import type { Railway } from '../journey/Railway';
+import { postBoard } from '../journey/StationBoards';
 import { MIRA_LED, ledQuad } from './MiraBoards';
 import { GROUND, TOP, V3, beam, cover, lamp, mat4, ramp, sign, solid, wall, type MiraCtx } from './MiraCtx';
 
@@ -339,6 +340,17 @@ export function buildPlatforms(c: MiraCtx, rail: Railway, hallS: [number, number
         sign(c, c.signs.caution, 0.75, 0.5, mat4(0, 1.2, 0).premultiply(m), { back: true, plate: [0.7, 0.7, 0.68], depth: 0.12 });
         solid(c, ...xz(P(s, o, 0)), 0.3, 0.3, 0, -1, 3);
       }
+    // The exit board past the south end of the PF 2/3 island's canopy, between the two tracks,
+    // facing the trains pulling out towards Churchgate (miraroad_exit.png): the big yellow board
+    // in its steel frame, under a little hood.
+    if (pf.ref === '2;3') {
+      let s = pf.s1 - 4.5;
+      for (let k = 0; k < 6 && nearFoot(P(s, oc(s), 0), 1); k++) s -= 2;
+      const o = oc(s);
+      const steel: [number, number, number] = [0.4, 0.34, 0.28];
+      postBoard(gb, { face: 'signs', paint: 'paint' }, c.signs.exitBoard, at(s, o, TOP, Math.PI), { w: 3.4, h: 1.15, y: 2.45, posts: { gap: 3.75, r: 0.07, square: true, colour: steel, top: 3.3 }, plate: steel, frame: { colour: steel, t: 0.1 }, hood: [0.36, 0.35, 0.33] });
+      for (const k of [-1, 1]) solid(c, ...xz(P(s, o + k * 1.875, 0)), 0.12, 0.12, 0, -1, TOP + 3.4);
+    }
 
     // ---- Benches, bins, stalls, water coolers --------------------------------------------------------
     for (let s = c0 + 3; s < c1 - 4; s += 10.5) {

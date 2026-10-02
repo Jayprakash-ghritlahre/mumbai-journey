@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { Engine, type Quality } from '../core/Engine';
 import { Input } from '../core/Input';
 import { TextureFactory } from '../gfx/TextureFactory';
-import { PRESET_HOURS, type TimePreset } from '../gfx/TimeOfDay';
+import { PRESET_HOURS, PRESET_LABEL, PRESET_ORDER, type TimePreset } from '../gfx/TimeOfDay';
 import { Churchgate } from '../world/churchgate/Churchgate';
 import { ExploreControls } from '../camera/ExploreControls';
 import { Hud, type ExploreStart } from '../ui/Hud';
@@ -19,8 +19,10 @@ import { CAR } from '../entities/train/Livery';
 import { RideControls } from '../camera/RideControls';
 import { Y } from '../world/churchgate/Layout';
 import { TOP as MIRA_TOP } from '../world/miraroad/MiraCtx';
+import { AutoRide } from '../world/journey/AutoRide';
+import { AutoAudio } from '../audio/AutoAudio';
 
-type Mode = 'loading' | 'menu' | 'explore' | 'cinematic' | 'ride';
+type Mode = 'loading' | 'menu' | 'explore' | 'cinematic' | 'ride' | 'auto';
 
 /** Hours between Mira Road and the chosen time (the ride's clock, ⚠ an estimate of the journey). */
 const JOURNEY_LEAD = 1.05;
@@ -77,6 +79,9 @@ export class App {
   private cineStartHour = 0;
   private sound: Soundscape | null = null;
   private rideAudio: RideAudio | null = null;
+  /** The auto ride from Shanti Nagar to the station (AUTO_RIDE.md). */
+  private autoRide!: AutoRide;
+  private autoAudio: AutoAudio | null = null;
   private cpu = { update: 0, render: 0 };
   private soundOn = true;
   /** Walking round Mira Road (exploring there, or on PF 4 before boarding the ride). */
@@ -112,6 +117,10 @@ export class App {
           this.ensureSound();
           this.startRide();
         },
+        onAuto: () => {
+          this.ensureSound();
+          this.startAuto();
+        },
         onTime: (t) => this.setPreset(t),
         onQuality: (q) => {
           this.engine.setQuality(q);
@@ -129,7 +138,7 @@ export class App {
     if (!p.hud) this.hud.root.style.display = 'none';
     this.hud.showStats(p.stats);
     this.engine.renderer.domElement.addEventListener('click', () => {
-      if (this.mode === 'explore' || this.mode === 'ride') this.input.requestLock();
+      if (this.mode === 'explore' || this.mode === 'ride' || this.mode === 'auto') this.input.requestLock();
     });
     document.addEventListener('pointerlockchange', () => this.hud.setPointerHint(document.pointerLockElement === this.engine.renderer.domElement));
     (window as unknown as { __mj: unknown }).__mj = this.testApi();
@@ -159,7 +168,19 @@ export class App {
     this.rideControls.onHint = (t) => this.hud.hint(t);
     this.rideControls.onAlight = (p, yaw, pitch) => this.alight(p, yaw, pitch);
     await progress('Mira Road station', 0.88);
-    await this.world.journey.loadMira();
+    const miraRoad = await this.world.journey.loadMira();
+    this.autoRide = new AutoRide(miraRoad, this.world.mats, this.input, {
+      hint: (t) => this.hud.hint(t),
+      sub: (en, deva) => this.hud.sub(en, deva),
+      hideSub: () => this.hud.hideSub(),
+      toast: (t) => this.hud.toast(t),
+      title: (a, b, c) => this.hud.title(a, b, c),
+      hideTitle: () => this.hud.hideTitle(),
+      fade: (on) => this.hud.fade(on),
+      alight: (x, z, yaw) => this.finishAuto(x, z, yaw),
+      hour: () => this.hour,
+      letterbox: (on) => this.hud.letterbox(on),
+    });
     // The line between: salt pans, Borivali, the suburbs, Mahim Creek, Dadar, the mill lands.
     for (const [k, f] of [
       ['A', 0.9],
@@ -213,6 +234,23 @@ export class App {
         },
       });
       Object.assign(window, {
+        __auto: {
+          ride: this.autoRide,
+          /** Start the auto ride and put the auto at s along the route (riding), at an hour. */
+          go: (s: number, hour?: number) => {
+            if (this.mode !== 'auto') this.startAuto();
+            if (hour !== undefined) {
+              this.hour = hour;
+              this.engine.setHour(hour);
+            }
+            this.autoRide.jump(s);
+          },
+          look: (yawDeg: number, pitchDeg: number) => {
+            this.autoRide.yaw = THREE.MathUtils.degToRad(yawDeg);
+            this.autoRide.pitch = THREE.MathUtils.degToRad(pitchDeg);
+          },
+          state: () => ({ phase: this.autoRide.phase, s: +this.autoRide.s.toFixed(1), v: +this.autoRide.v.toFixed(2), dbg: this.autoRide.dbg, sig: this.world.journey.mira?.auto.streets.signal.state(0) }),
+        },
         __journey: {
           show: (k: StretchKey | null) => {
             w.journey.show(k);
@@ -265,6 +303,9 @@ export class App {
     if (where === 'mira') {
       this.setMode('menu');
       this.startMiraWalk('forecourt', false);
+    } else if (where === 'auto') {
+      this.setMode('menu');
+      this.startAuto();
     } else this.setMode(this.params.mode ?? 'menu');
     if (this.params.cam) {
       const [x, y, z, yaw, pitch] = this.params.cam;
@@ -304,7 +345,16 @@ export class App {
     const w = this.world;
     this.sound = new Soundscape({
       trains: w.trains,
-      traffic: w.traffic,
+      // Horns from the street you are on: Churchgate's, or Mira Road's (and the auto ride's).
+      traffic: {
+        nearby: (p, r) => {
+          const mira = w.journey.mira;
+          if (!w.far) return w.traffic.nearby(p, r);
+          if (!mira || !this.avMira) return [];
+          const g = mira.group.position;
+          return mira.auto.traffic.nearby({ x: p.x - g.x, z: p.z - g.z }, r).map((v) => ({ pos: new THREE.Vector3(v.x + g.x, 1, v.z + g.z), speed: v.speed, kind: v.kind }));
+        },
+      },
       speakers: w.hangings.speakers,
       peopleNear: (p, r) => {
         const mira = w.journey.mira;
@@ -312,7 +362,7 @@ export class App {
         const extra = mira && this.avMira && !(this.ride.active && this.ride.current.key === 'A') ? mira.crowd.peopleNear(p, r, mira.group.position) : [];
         return [...this.ride.peopleNear(p, r), ...extra];
       },
-      interior: (p) => (this.ride.contains(p) ? 0.55 : w.far ? (this.avMira && w.journey.mira ? w.journey.mira.interiorFactor(p) : 0) : w.interiorFactor(p)),
+      interior: (p) => (this.ride.contains(p) ? 0.55 : this.autoRide.seated ? 0.25 : w.far ? (this.avMira && w.journey.mira ? w.journey.mira.interiorFactor(p) : 0) : w.interiorFactor(p)),
       // Churchgate's streets by the vehicles near by; Mira Road's roads and auto stand; elsewhere on
       // the line, only the distant city.
       street: (p) => (!w.far ? Math.min(1, w.traffic.nearby(p, 110).length / 10) : this.avMira && !this.ride.contains(p) ? 0.7 : 0.15),
@@ -327,8 +377,11 @@ export class App {
       this.hud.sub(en, deva);
       window.setTimeout(() => this.hud.hideSub(), 9000);
     };
+    // Announcements are spoken by the browser (Google's voices in Chrome): say so when it fails.
+    this.sound.audio.onSpeechError = (why) => this.hud.toast(`Announcement voice failed (${why}) · captions only · restart the browser to restore it`, 8000);
     this.rideAudio = new RideAudio(this.sound.audio, w.railway.dMiraRoad);
     this.rideAudio.onSubtitle = this.sound.onSubtitle;
+    this.autoAudio = new AutoAudio(this.sound.audio);
     void this.sound.start().then(() => this.sound?.setEnabled(this.soundOn));
   }
 
@@ -365,6 +418,58 @@ export class App {
       }
       this.explore.takeOverFromCamera();
     }
+  }
+
+  /**
+   * "Auto to the station": at your society's gate in Shanti Nagar, Sector 2. Walk out to the lane,
+   * wave down an auto, ride it to Mira Road station's forecourt, and walk on into the station.
+   */
+  private startAuto(): void {
+    const mira = this.world.journey.mira;
+    if (!mira) return;
+    if (this.ride.active) this.ride.stop();
+    this.setMode('auto');
+    this.world.journey.show('A');
+    this.world.setFar(true);
+    this.explore.world = mira.collision;
+    this.explore.bounds = this.autoRide.walkBounds;
+    const st = this.autoRide.start;
+    this.explore.enabled = true;
+    this.explore.place(st.x, st.z, st.yaw, -0.03);
+    this.litHour = -1;
+    this.autoRide.begin();
+    this.hud.setHints('auto');
+    this.hud.toast('Shanti Nagar · शांती नगर');
+  }
+
+  /** Out of the auto at the forecourt: walking at Mira Road (the Churchgate fast is a few minutes off). */
+  private finishAuto(x: number, z: number, yaw: number): void {
+    const mira = this.world.journey.mira!;
+    this.mode = 'explore';
+    this.miraWalk = true;
+    this.explore.world = mira.collision;
+    this.explore.bounds = mira.bounds;
+    this.explore.enabled = true;
+    this.explore.place(x, z, yaw, 0);
+    this.miraNextRide = this.hour + 2.5 / 60;
+    const cam = this.engine.camera;
+    cam.fov = 55;
+    cam.updateProjectionMatrix();
+    this.hud.setHints('explore');
+    this.hud.hint(null);
+    this.hud.toast('Mira Road · मिरा रोड');
+  }
+
+  /** Leaving the auto ride for the menu or another start. */
+  private leaveAuto(): void {
+    this.autoRide.stop();
+    const cam = this.engine.camera;
+    cam.fov = 55;
+    cam.updateProjectionMatrix();
+    this.world.journey.show(null);
+    this.world.setFar(false);
+    this.explore.world = this.world.collision;
+    this.explore.bounds = { ...this.cgBounds };
   }
 
   /** "Ride the local": on Mira Road's PF 4 as the Churchgate fast comes in; walk aboard. */
@@ -410,6 +515,7 @@ export class App {
   private leaveMira(): void {
     if (!this.miraWalk) return;
     this.miraWalk = false;
+    this.autoRide?.stop();
     if (this.ride.active) this.ride.stop();
     else {
       this.world.journey.show(null);
@@ -530,6 +636,7 @@ export class App {
 
   private setMode(mode: Mode): void {
     if (mode !== 'ride') this.leaveMira();
+    if (this.mode === 'auto' && mode !== 'auto') this.leaveAuto();
     this.mode = mode;
     if (mode === 'cinematic') {
       this.hud.showMenu(false);
@@ -563,7 +670,7 @@ export class App {
       return;
     }
     this.hud.showMenu(mode === 'menu');
-    this.hud.showHud(mode === 'explore' || mode === 'ride');
+    this.hud.showHud(mode === 'explore' || mode === 'ride' || mode === 'auto');
     if (mode !== 'ride') {
       this.hud.hint(null);
       this.hud.setHints('explore');
@@ -579,9 +686,9 @@ export class App {
       // Start on the concourse by the platform 3 buffer stop, facing up the platforms.
       this.explore.place(0, 6, 0);
       this.hud.setPointerHint(false);
-    } else if (mode === 'ride') {
+    } else if (mode === 'ride' || mode === 'auto') {
       this.fixedCam = false;
-      this.explore.enabled = false;
+      this.explore.enabled = mode === 'auto';
       this.hud.setPointerHint(false);
     } else {
       this.explore.enabled = false;
@@ -615,15 +722,27 @@ export class App {
       this.updateRide(dt);
       if (this.input.hit('Escape')) this.setMode('menu');
       if (this.input.hit('Backquote')) this.hud.showStats(!this.hud.statsVisible);
-    } else if (this.mode === 'explore' && !this.fixedCam) {
-      this.explore.update(dt);
-      if (this.miraWalk) this.updateMiraWalk(dt);
+    } else if (this.mode === 'auto' && !this.fixedCam) {
+      // On foot until you are in the auto; then the ride has the camera.
+      if (!this.autoRide.ownsCamera) this.explore.update(dt);
+      this.autoRide.night = this.engine.lighting.lamps;
+      this.autoRide.update(dt, this.engine.camera, this.explore);
       if (this.input.hit('Escape')) this.setMode('menu');
       if (this.input.hit('Backquote')) this.hud.showStats(!this.hud.statsVisible);
       if (this.input.hit('KeyT')) {
-        const order: TimePreset[] = ['morning', 'afternoon', 'golden', 'night'];
-        this.setPreset(order[(order.indexOf(this.preset) + 1) % order.length]);
-        this.hud.toast(this.preset === 'golden' ? 'Golden hour' : this.preset[0].toUpperCase() + this.preset.slice(1));
+        this.setPreset(PRESET_ORDER[(PRESET_ORDER.indexOf(this.preset) + 1) % PRESET_ORDER.length]);
+        this.hud.toast(PRESET_LABEL[this.preset]);
+      }
+    } else if (this.mode === 'explore' && !this.fixedCam) {
+      this.explore.update(dt);
+      if (this.miraWalk) this.updateMiraWalk(dt);
+      // The auto you came in drives off.
+      if (this.autoRide.phase === 'away') this.autoRide.update(dt, this.engine.camera, this.explore);
+      if (this.input.hit('Escape')) this.setMode('menu');
+      if (this.input.hit('Backquote')) this.hud.showStats(!this.hud.statsVisible);
+      if (this.input.hit('KeyT')) {
+        this.setPreset(PRESET_ORDER[(PRESET_ORDER.indexOf(this.preset) + 1) % PRESET_ORDER.length]);
+        this.hud.toast(PRESET_LABEL[this.preset]);
         if (this.miraWalk) {
           // A new time: the next train is a couple of minutes off.
           this.ride.park();
@@ -663,7 +782,10 @@ export class App {
     this.world.update(dt, this.time, light, this.hour, this.engine.camera);
     this.ride.update(dt, this.time, light.lamps, this.engine.camera);
     this.sound?.update(dt, this.engine.camera, this.hour);
-    if (this.sound && this.sound.audio.ctx.state === 'running') this.rideAudio?.update(dt, this.engine.camera, this.ride);
+    if (this.sound && this.sound.audio.ctx.state === 'running') {
+      this.rideAudio?.update(dt, this.engine.camera, this.ride);
+      this.autoAudio?.update(dt, this.autoRide, this.engine.camera);
+    }
     // Mira Road has its own ambient light map; the materials read it while the scenery is there.
     const mira = this.world.journey.mira;
     const wantMira = !!mira && this.world.far && this.world.journey.current === 'A';
@@ -682,7 +804,8 @@ export class App {
       mira.timetable.rideAt = this.rideDue;
     } else if (!this.ride.active) this.rideDue = 0;
     const inCar = this.ride.contains(this.engine.camera.position);
-    const interior = inCar ? 0.62 : this.world.far ? (wantMira ? mira!.interiorFactor(this.engine.camera.position) : 0) : this.world.interiorFactor(this.engine.camera.position);
+    const inAuto = this.mode === 'auto' && this.autoRide.seated;
+    const interior = inCar ? 0.62 : inAuto ? 0.22 : this.world.far ? (wantMira ? mira!.interiorFactor(this.engine.camera.position) : 0) : this.world.interiorFactor(this.engine.camera.position);
     this.engine.sunVisibleFromCamera = 1 - 0.85 * interior;
     this.engine.interior = interior;
     // Eyes adapt to the dimmer shed by day; at night the lamp-lit shed is the bright place.
@@ -690,7 +813,10 @@ export class App {
     const cp = this.engine.camera.position;
     const zone = this.world.far ? null : this.world.route.layout.zoneAt(cp.x, cp.z, cp.y);
     const miraPlace = wantMira && !inCar ? mira!.placeAt(cp) : null;
-    if (miraPlace) this.hud.setLocation(miraPlace[0], miraPlace[1]);
+    if (this.mode === 'auto') {
+      const [en, deva] = this.autoRide.placeName();
+      this.hud.setLocation(en, deva);
+    } else if (miraPlace) this.hud.setLocation(miraPlace[0], miraPlace[1]);
     else if (this.ride.active && (this.world.far || !zone)) this.hud.setLocation(this.ride.current.title[0], this.ride.current.title[1]);
     else if (zone) this.hud.setLocation(zone.en, zone.deva);
     const h = Math.floor(this.hour);
@@ -704,6 +830,17 @@ export class App {
       frames: () => this.frames,
       stats: () => ({ ...this.engine.stats, cpuUpdate: this.cpu.update, cpuRender: this.cpu.render, mode: this.mode, people: this.world?.crowd?.count ?? 0, shot: this.cine?.currentShot ?? '', T: this.cine?.T ?? 0 }),
       setCamera: (x: number, y: number, z: number, yaw: number, pitch: number) => this.setCamera(x, y, z, yaw, pitch),
+      hour: () => this.hour,
+      groups: () => this.world.crowd.groups(),
+      /** A row of n people (women by default) 4 m in front of the camera, facing it. */
+      lineup: (n = 9, who: 'women' | 'all' = 'women') => {
+        const cam = this.engine.camera;
+        const f = new THREE.Vector3();
+        cam.getWorldDirection(f);
+        f.y = 0;
+        f.normalize();
+        this.world.crowd.lineup(cam.position.x + f.x * 4, cam.position.z + f.z * 4, Math.atan2(-f.x, -f.z), n, who);
+      },
       setHour: (h: number) => {
         this.hour = h;
         this.engine.setHour(h);

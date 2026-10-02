@@ -1,6 +1,7 @@
 import { RNG } from '../../core/Random';
 import { ADS, DEVA, LATIN, drawAd, drawClockFace, drawDirectionSign, drawPlatformNumber, fitFont, type AdSpec, type AtlasRect, type DirLine, type SignAtlas } from '../../gfx/Signage';
 import type { Ctx } from '../../gfx/TextureFactory';
+import { drawNameBoard } from '../journey/StationBoards';
 
 /**
  * Mira Road's signs, painted after the reference photos (assets/miraroad, reconstruction only).
@@ -345,6 +346,8 @@ export interface MiraSignSet {
   plaque: AtlasRect;
   fobBoard: AtlasRect;
   diamond: AtlasRect;
+  /** The exit board at the south end of the PF 2/3 island (miraroad_exit.png). */
+  exitBoard: AtlasRect;
   pf: Record<string, AtlasRect>;
   caution: AtlasRect;
   booking: AtlasRect;
@@ -379,6 +382,7 @@ export function buildMiraSigns(atlas: SignAtlas): MiraSignSet {
     plaque: atlas.add(512, 192, drawNamePlaque),
     fobBoard: atlas.add(768, 192, drawFobBoard),
     diamond: atlas.add(256, 256, drawDiamond),
+    exitBoard: atlas.add(704, 238, (c, w, h) => drawNameBoard(c, w, h, 'मीरा रोड', 'MIRA ROAD', 'mira')),
     pf,
     caution: atlas.add(192, 128, drawCaution),
     booking: dir({ mr: 'तिकीट घर', hi: 'टिकट घर', en: 'BOOKING OFFICE' }, 'none', '#1d4f9c', 21),
@@ -405,4 +409,368 @@ export function buildMiraSigns(atlas: SignAtlas): MiraSignSet {
     clock: atlas.add(256, 256, drawClockFace),
   };
   return set;
+}
+
+// ---- The auto ride's streets (AUTO_RIDE.md): own small atlas ------------------------------------
+
+/** A housing society's name board by its gate (all names fictional). */
+export interface SocietySpec {
+  name: string;
+  deva: string;
+  bg: string;
+  fg: string;
+}
+
+export const SOCIETIES: SocietySpec[] = [
+  { name: 'Sai Darshan Co-op. Hsg. Soc. Ltd.', deva: 'साई दर्शन को-ऑप. हौ. सो. लि.', bg: '#f5efe1', fg: '#7a1b14' },
+  { name: 'Gokul Dham Co-op. Hsg. Soc.', deva: 'गोकुळ धाम को-ऑप. हौ. सो.', bg: '#e9f1f7', fg: '#173f7a' },
+  { name: 'Shree Krishna Kunj C.H.S.', deva: 'श्री कृष्ण कुंज', bg: '#fff6d8', fg: '#2f5d1a' },
+  { name: 'Jeevan Jyot Co-op. Hsg. Soc.', deva: 'जीवन ज्योत को-ऑप. हौ. सो.', bg: '#f7e8e4', fg: '#5b1a3a' },
+  { name: 'Om Shanti Apartments', deva: 'ॐ शांती अपार्टमेंट', bg: '#eef5ec', fg: '#1d4d2a' },
+  { name: 'Navkar Co-op. Hsg. Soc. Ltd.', deva: 'नवकार को-ऑप. हौ. सो. लि.', bg: '#f1ece6', fg: '#3a2a1a' },
+];
+
+export function drawSocietyBoard(c: Ctx, w: number, h: number, s: SocietySpec, seed: number): void {
+  c.fillStyle = s.bg;
+  c.fillRect(0, 0, w, h);
+  c.strokeStyle = s.fg;
+  c.lineWidth = h * 0.045;
+  c.strokeRect(h * 0.06, h * 0.06, w - h * 0.12, h * 0.88);
+  c.fillStyle = s.fg;
+  centred(c, s.deva, w / 2, h * 0.3, '700', DEVA, h * 0.26, w * 0.88);
+  centred(c, s.name.toUpperCase(), w / 2, h * 0.58, '800', LATIN, h * 0.18, w * 0.88);
+  c.globalAlpha = 0.8;
+  centred(c, 'Shanti Nagar, Sector 2, Mira Road (E)', w / 2, h * 0.8, '400', LATIN, h * 0.11, w * 0.8);
+  c.globalAlpha = 1;
+  grime(c, w, h, seed, 0.7);
+}
+
+/** The municipal corporation's road name board (blue, white lettering) ⚠ layout generic. */
+export function drawRoadBoard(c: Ctx, w: number, h: number, deva: string, en: string, bg = '#174f9c'): void {
+  c.fillStyle = bg;
+  c.fillRect(0, 0, w, h);
+  c.strokeStyle = '#ffffff';
+  c.lineWidth = h * 0.04;
+  c.strokeRect(h * 0.06, h * 0.06, w - h * 0.12, h * 0.88);
+  c.fillStyle = '#ffffff';
+  centred(c, deva, w / 2, h * 0.33, '700', DEVA, h * 0.32, w * 0.86);
+  centred(c, en, w / 2, h * 0.66, '800', LATIN, h * 0.24, w * 0.86);
+  c.globalAlpha = 0.85;
+  centred(c, 'मीरा-भाईंदर महानगरपालिका', w / 2, h * 0.86, '400', DEVA, h * 0.1, w * 0.6);
+  c.globalAlpha = 1;
+  grime(c, w, h, 61, 0.6);
+}
+
+/** A vinyl banner strung between two posts (fictional greetings and notices). */
+export interface BannerSpec {
+  bg: [string, string];
+  title: string;
+  sub: string;
+  fg: string;
+  accent: string;
+}
+
+export const BANNERS: BannerSpec[] = [
+  { bg: ['#ff9f1c', '#ffd23f'], title: 'गणेशोत्सवाच्या हार्दिक शुभेच्छा!', sub: 'Shanti Nagar Sarvajanik Ganeshotsav Mandal · Sector 2', fg: '#7a0d0d', accent: '#c1121f' },
+  { bg: ['#e3f2fd', '#bbdefb'], title: 'मोफत आरोग्य तपासणी शिबीर', sub: 'Free health check-up camp · Sunday 9 am – 1 pm · Sector 4 hall', fg: '#0d3b78', accent: '#2e7d32' },
+  { bg: ['#6a1b9a', '#d81b60'], title: 'नवरात्री दांडिया रास', sub: 'Dandiya nights · Poonam Sagar ground · Passes at the society office', fg: '#fff4c2', accent: '#ffd23f' },
+];
+
+export function drawBanner(c: Ctx, w: number, h: number, b: BannerSpec, seed: number): void {
+  const g = c.createLinearGradient(0, 0, w, h);
+  g.addColorStop(0, b.bg[0]);
+  g.addColorStop(1, b.bg[1]);
+  c.fillStyle = g;
+  c.fillRect(0, 0, w, h);
+  c.fillStyle = b.accent;
+  c.fillRect(0, 0, w, h * 0.07);
+  c.fillRect(0, h * 0.93, w, h * 0.07);
+  // Marigold strings at the ends.
+  for (const x0 of [h * 0.35, w - h * 0.35]) {
+    for (let i = 0; i < 7; i++) {
+      c.fillStyle = i % 2 ? '#ff8f00' : '#ffd000';
+      c.beginPath();
+      c.arc(x0, h * (0.16 + i * 0.12), h * 0.06, 0, Math.PI * 2);
+      c.fill();
+    }
+  }
+  c.fillStyle = b.fg;
+  centred(c, b.title, w / 2, h * 0.4, '700', DEVA, h * 0.36, w * 0.76);
+  centred(c, b.sub, w / 2, h * 0.75, '700', LATIN, h * 0.15, w * 0.78);
+  grime(c, w, h, seed, 0.35);
+}
+
+/**
+ * The shops round the station as they stand (the user's Street View captures, Dec 2021 and Apr 2026):
+ * name boards in each shop's colours and lettering style, drawn here (no logos copied).
+ */
+export interface StationShopSpec {
+  key: string;
+  draw: (c: Ctx, w: number, h: number) => void;
+}
+
+function vegMark(c: Ctx, x: number, y: number, s: number): void {
+  c.fillStyle = '#ffffff';
+  c.fillRect(x - s / 2, y - s / 2, s, s);
+  c.strokeStyle = '#1b8f2e';
+  c.lineWidth = s * 0.12;
+  c.strokeRect(x - s * 0.42, y - s * 0.42, s * 0.84, s * 0.84);
+  c.fillStyle = '#1b8f2e';
+  c.beginPath();
+  c.arc(x, y, s * 0.22, 0, Math.PI * 2);
+  c.fill();
+}
+
+export const STATION_SHOPS: StationShopSpec[] = [
+  {
+    key: 'vegSagar',
+    draw: (c, w, h) => {
+      const g = c.createLinearGradient(0, 0, 0, h);
+      g.addColorStop(0, '#2e7d32');
+      g.addColorStop(1, '#1b5e20');
+      c.fillStyle = g;
+      c.fillRect(0, 0, w, h);
+      c.fillStyle = '#fdd835';
+      c.fillRect(0, h * 0.86, w, h * 0.14);
+      vegMark(c, h * 0.42, h * 0.42, h * 0.38);
+      c.fillStyle = '#ffffff';
+      centred(c, 'VEG SAGAR', w * 0.55, h * 0.33, '800', LATIN, h * 0.4, w * 0.7);
+      c.fillStyle = '#fff59d';
+      centred(c, 'व्हेज सागर · शुद्ध शाकाहारी', w * 0.55, h * 0.64, '700', DEVA, h * 0.17, w * 0.7);
+      c.fillStyle = '#1b5e20';
+      centred(c, 'Pure Veg Restaurant · South Indian · Punjabi · Chinese', w / 2, h * 0.93, '700', LATIN, h * 0.09, w * 0.9);
+      grime(c, w, h, 701, 0.5);
+    },
+  },
+  {
+    key: 'bikaner',
+    draw: (c, w, h) => {
+      c.fillStyle = '#b71c1c';
+      c.fillRect(0, 0, w, h);
+      c.fillStyle = '#fbc02d';
+      c.fillRect(0, 0, w, h * 0.08);
+      c.fillRect(0, h * 0.92, w, h * 0.08);
+      c.fillStyle = '#ffeb3b';
+      centred(c, 'BIKANER', w / 2, h * 0.38, '800', '"Noto Serif", "Noto Sans", serif', h * 0.44, w * 0.8);
+      c.fillStyle = '#ffffff';
+      centred(c, 'बीकानेर स्वीट्स · Sweets · Namkeen · Snacks', w / 2, h * 0.74, '700', DEVA, h * 0.15, w * 0.86);
+      grime(c, w, h, 702, 0.5);
+    },
+  },
+  {
+    key: 'jio',
+    draw: (c, w, h) => {
+      c.fillStyle = '#0a2885';
+      c.fillRect(0, 0, w, h);
+      c.fillStyle = '#ffffff';
+      c.beginPath();
+      c.arc(h * 0.62, h / 2, h * 0.36, 0, Math.PI * 2);
+      c.fill();
+      c.fillStyle = '#0a2885';
+      centred(c, 'Jio', h * 0.62, h * 0.53, '800', LATIN, h * 0.32, h * 0.6);
+      c.fillStyle = '#ffffff';
+      c.textAlign = 'left';
+      c.font = `800 ${Math.round(h * 0.34)}px ${LATIN}`;
+      c.textBaseline = 'middle';
+      c.fillText('Jio', h * 1.15, h * 0.4);
+      c.font = `400 ${Math.round(h * 0.16)}px ${LATIN}`;
+      c.fillText('Store · Mobiles · Recharge · JioFiber', h * 1.15, h * 0.72);
+      grime(c, w, h, 703, 0.35);
+    },
+  },
+  {
+    key: 'monginis',
+    draw: (c, w, h) => {
+      const g = c.createLinearGradient(0, 0, w, 0);
+      g.addColorStop(0, '#ad1457');
+      g.addColorStop(1, '#d81b60');
+      c.fillStyle = g;
+      c.fillRect(0, 0, w, h);
+      c.fillStyle = '#ffffff';
+      centred(c, 'monginis', w / 2, h * 0.42, 'italic 800', '"Noto Serif", "Noto Sans", serif', h * 0.5, w * 0.72);
+      c.globalAlpha = 0.9;
+      centred(c, 'The Cake Shop', w / 2, h * 0.78, '400', LATIN, h * 0.14, w * 0.6);
+      c.globalAlpha = 1;
+      grime(c, w, h, 704, 0.4);
+    },
+  },
+  {
+    key: 'jumboking',
+    draw: (c, w, h) => {
+      c.fillStyle = '#ffd400';
+      c.fillRect(0, 0, w, h);
+      c.fillStyle = '#d32f2f';
+      c.fillRect(0, h * 0.84, w, h * 0.16);
+      c.fillStyle = '#c62828';
+      centred(c, "JK'S", w * 0.12, h * 0.4, '800', LATIN, h * 0.2, w * 0.14);
+      centred(c, 'JUMBOKING', w * 0.56, h * 0.42, '900', LATIN, h * 0.44, w * 0.74);
+      c.fillStyle = '#ffffff';
+      centred(c, 'Vada Pav · Burgers · since 2001', w / 2, h * 0.92, '700', LATIN, h * 0.11, w * 0.8);
+      grime(c, w, h, 705, 0.5);
+    },
+  },
+  {
+    key: 'oppo',
+    draw: (c, w, h) => {
+      c.fillStyle = '#0b8a4a';
+      c.fillRect(0, 0, w, h);
+      c.fillStyle = '#ffffff';
+      centred(c, 'OPPO', w / 2, h * 0.45, '400', LATIN, h * 0.55, w * 0.5);
+      centred(c, 'Mobile Gallery · Authorised Store', w / 2, h * 0.84, '400', LATIN, h * 0.11, w * 0.7);
+      grime(c, w, h, 706, 0.3);
+    },
+  },
+  {
+    key: 'ambika',
+    draw: (c, w, h) => {
+      c.fillStyle = '#c62828';
+      c.fillRect(0, 0, w, h);
+      c.strokeStyle = '#ffeb3b';
+      c.lineWidth = h * 0.05;
+      c.strokeRect(h * 0.06, h * 0.06, w - h * 0.12, h * 0.88);
+      c.fillStyle = '#ffeb3b';
+      centred(c, 'AMBIKA', w / 2, h * 0.4, '800', LATIN, h * 0.42, w * 0.6);
+      c.fillStyle = '#ffffff';
+      centred(c, 'अंबिका', w / 2, h * 0.75, '700', DEVA, h * 0.22, w * 0.5);
+      grime(c, w, h, 707, 0.5);
+    },
+  },
+  {
+    key: 'udupi',
+    draw: (c, w, h) => {
+      c.fillStyle = '#b71c1c';
+      c.fillRect(0, 0, w, h);
+      c.fillStyle = '#fff176';
+      centred(c, 'उडुपी हॉटेल', w / 2, h * 0.4, '700', DEVA, h * 0.42, w * 0.8);
+      c.fillStyle = '#ffffff';
+      centred(c, 'UDUPI HOTEL · Idli · Dosa · Meals', w / 2, h * 0.8, '700', LATIN, h * 0.15, w * 0.8);
+      grime(c, w, h, 708, 0.5);
+    },
+  },
+  {
+    key: 'generic',
+    draw: (c, w, h) => {
+      c.fillStyle = '#1e7d32';
+      c.fillRect(0, 0, w, h);
+      c.fillStyle = '#ffffff';
+      const cx = h * 0.5;
+      c.fillRect(cx - h * 0.08, h * 0.2, h * 0.16, h * 0.6);
+      c.fillRect(cx - h * 0.3, h * 0.42, h * 0.6, h * 0.16);
+      centred(c, 'GENERIC MEDICAL', w * 0.57, h * 0.38, '800', LATIN, h * 0.34, w * 0.76);
+      c.fillStyle = '#c8e6c9';
+      centred(c, 'जेनेरिक मेडिकल · Medicines at lower prices', w * 0.57, h * 0.76, '700', DEVA, h * 0.14, w * 0.76);
+      grime(c, w, h, 709, 0.5);
+    },
+  },
+  {
+    key: 'unionBank',
+    draw: (c, w, h) => {
+      c.fillStyle = '#d32f2f';
+      c.fillRect(0, 0, w, h);
+      c.fillStyle = '#ffffff';
+      c.fillRect(h * 0.18, h * 0.18, h * 0.64, h * 0.64);
+      c.fillStyle = '#d32f2f';
+      c.fillRect(h * 0.3, h * 0.3, h * 0.12, h * 0.4);
+      c.fillRect(h * 0.58, h * 0.3, h * 0.12, h * 0.4);
+      c.fillRect(h * 0.3, h * 0.58, h * 0.4, h * 0.12);
+      c.fillStyle = '#ffffff';
+      c.textAlign = 'left';
+      c.textBaseline = 'middle';
+      c.font = `800 ${Math.round(h * 0.34)}px ${LATIN}`;
+      c.fillText('Union Bank', h * 1.05, h * 0.36);
+      c.font = `700 ${Math.round(h * 0.2)}px ${DEVA}`;
+      c.fillText('यूनियन बैंक ऑफ इंडिया · of India', h * 1.05, h * 0.72);
+      grime(c, w, h, 710, 0.3);
+    },
+  },
+  {
+    key: 'bharatBank',
+    draw: (c, w, h) => drawLabel(c, w, h, 'भारत को-ऑप. बँक (मुंबई) लि.', 'BHARAT CO-OP. BANK (MUMBAI) LTD.', '#1d4f9c', '#ffffff'),
+  },
+  {
+    key: 'dorm',
+    draw: (c, w, h) => {
+      c.fillStyle = '#fafafa';
+      c.fillRect(0, 0, w, h);
+      c.fillStyle = '#c62828';
+      centred(c, 'FULLY A/C DORMITORY', w / 2, h * 0.32, '800', LATIN, h * 0.3, w * 0.9);
+      c.fillStyle = '#1a237e';
+      centred(c, '& PERSONAL CABIN · डॉर्मिटरी', w / 2, h * 0.72, '700', DEVA, h * 0.22, w * 0.9);
+      grime(c, w, h, 711, 0.7);
+    },
+  },
+  {
+    key: 'centre',
+    draw: (c, w, h) => drawLabel(c, w, h, 'शांती शॉपिंग सेंटर', 'SHANTI SHOPPING CENTRE', '#f3ead8', '#6d1b1b'),
+  },
+];
+
+/** First-floor boards along the route's shops (all fictional): classes, clinics, agents. */
+export const UPPER_BOARDS: [string, string, string, string][] = [
+  ['सक्सेस अकॅडमी', 'SUCCESS ACADEMY · SSC · HSC · CET', '#0d47a1', '#ffffff'],
+  ['डॉ. पटेल डेंटल क्लिनिक', "DR. PATEL'S DENTAL CLINIC", '#ffffff', '#00695c'],
+  ['श्री गणेश ट्रॅव्हल्स', 'SHREE GANESH TOURS & TRAVELS', '#ffeb3b', '#b71c1c'],
+  ['साई फिजिओथेरपी', 'SAI PHYSIOTHERAPY CENTRE', '#e3f2fd', '#1565c0'],
+  ['लकी लेडीज टेलर', 'LUCKY LADIES TAILOR', '#880e4f', '#ffffff'],
+  ['ओम सर्व्हिसेस', 'OM SERVICES · PAN · AADHAAR · INSURANCE', '#ff6f00', '#ffffff'],
+];
+
+export interface FirstMileSigns {
+  societies: AtlasRect[];
+  sector: AtlasRect;
+  poonamSagar: AtlasRect;
+  toStation: AtlasRect;
+  banners: AtlasRect[];
+  station: Record<string, AtlasRect>;
+  upper: AtlasRect[];
+  /** A festival greeting banner across a facade (fictional). */
+  bigBanner: AtlasRect;
+}
+
+export function buildFirstMileSigns(atlas: SignAtlas): FirstMileSigns {
+  return {
+    societies: SOCIETIES.map((s, i) => atlas.add(384, 128, (c, w, h) => drawSocietyBoard(c, w, h, s, 500 + i))),
+    sector: atlas.add(512, 160, (c, w, h) => drawRoadBoard(c, w, h, 'शांती नगर · सेक्टर २', 'SHANTI NAGAR · SECTOR 2', '#1b6b3a')),
+    poonamSagar: atlas.add(512, 160, (c, w, h) => drawRoadBoard(c, w, h, 'पूनम सागर रोड', 'POONAM SAGAR ROAD')),
+    toStation: atlas.add(512, 160, (c, w, h) => drawDirectionSign(c, w, h, { mr: 'मीरा रोड स्टेशन', en: 'MIRA ROAD STATION' }, 'left', '#1b7a3d', 62)),
+    banners: BANNERS.map((b, i) => atlas.add(1024, 176, (c, w, h) => drawBanner(c, w, h, b, 520 + i))),
+    station: Object.fromEntries(STATION_SHOPS.map((q) => [q.key, atlas.add(512, 128, q.draw)])),
+    upper: UPPER_BOARDS.map(([d, e, bg, fg]) => atlas.add(512, 96, (c, w, h) => drawLabel(c, w, h, d, e, bg, fg))),
+    bigBanner: atlas.add(1024, 384, drawBigBanner),
+  };
+}
+
+/** A big festival greeting on a facade (fictional mandal; figures as plain silhouettes). */
+export function drawBigBanner(c: Ctx, w: number, h: number): void {
+  const g = c.createLinearGradient(0, 0, w, h);
+  g.addColorStop(0, '#ff8f00');
+  g.addColorStop(0.55, '#ffca28');
+  g.addColorStop(1, '#ef6c00');
+  c.fillStyle = g;
+  c.fillRect(0, 0, w, h);
+  c.fillStyle = '#1b5e20';
+  c.fillRect(0, h * 0.86, w, h * 0.14);
+  // Three portrait roundels (silhouettes), as on every such banner.
+  for (let k = 0; k < 3; k++) {
+    const x = w * (0.1 + k * 0.12);
+    const y = h * 0.42;
+    c.fillStyle = '#fff3e0';
+    c.beginPath();
+    c.arc(x, y, h * 0.22, 0, Math.PI * 2);
+    c.fill();
+    c.fillStyle = '#5d4037';
+    c.beginPath();
+    c.arc(x, y - h * 0.05, h * 0.08, 0, Math.PI * 2);
+    c.fill();
+    c.beginPath();
+    c.ellipse(x, y + h * 0.13, h * 0.13, h * 0.09, 0, Math.PI, 0);
+    c.fill();
+  }
+  c.fillStyle = '#b71c1c';
+  centred(c, 'दिवाळीच्या हार्दिक शुभेच्छा!', w * 0.68, h * 0.32, '800', DEVA, h * 0.2, w * 0.58);
+  c.fillStyle = '#4e342e';
+  centred(c, 'मीरा रोड (पूर्व) येथील सर्व नागरिकांना', w * 0.68, h * 0.58, '700', DEVA, h * 0.11, w * 0.56);
+  c.fillStyle = '#ffffff';
+  centred(c, 'Shanti Nagar Yuva Mitra Mandal', w / 2, h * 0.93, '700', LATIN, h * 0.08, w * 0.6);
+  grime(c, w, h, 712, 0.6);
 }

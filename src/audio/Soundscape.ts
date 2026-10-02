@@ -2,13 +2,13 @@ import * as THREE from 'three';
 import { AudioEngine } from './AudioEngine';
 import { CrowdBed, SeaBed, StreetBed, TrainVoice, babble, chime, crow, footstep, honk, pigeon } from './Synth';
 import type { TrainSystem, TrainView } from '../entities/train/TrainSystem';
-import type { Traffic } from '../entities/traffic/Traffic';
 import type { Service } from '../entities/train/Timetable';
 import { fmtTime } from '../entities/train/Timetable';
 
 export interface SoundWorld {
   trains: TrainSystem;
-  traffic: Traffic;
+  /** Vehicles near a point (horns). */
+  traffic: { nearby(p: THREE.Vector3, r: number): { pos: THREE.Vector3; speed: number; kind: string }[] };
   speakers: THREE.Vector3[];
   /** Positions of people near a point: walking flag and position. */
   peopleNear: (p: THREE.Vector3, r: number) => { pos: THREE.Vector3; walking: boolean }[];

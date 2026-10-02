@@ -12,7 +12,7 @@ import type { TreeSpot } from '../city/Trees';
 import { flatPolygon, pathStrip, pathWall, type Path2 } from './Path2';
 import { H, MD, NP } from './RouteLayout';
 import { at, instanceProps } from './MarineDrive';
-import { C, Kit, dustbin, tetrapodGeometry, twinArmLamp, uHoop, type PropGeo } from './Props';
+import { dustbin, tetrapodGeometry, twinArmLamp, uHoop } from './Props';
 import type { WalkSurface } from './WalkSurface';
 import type { SignalDef, Phase } from './Signals';
 import type { VehicleKind } from '../../entities/traffic/VehicleGeometry';
@@ -827,32 +827,15 @@ export function buildNarimanPoint(tf: TextureFactory, mats: StationMaterials, co
     trees.push({ x, z, s: rng.range(0.85, 1.15), kind: rng.chance(0.5) ? 'palm' : 'almond', y: H.footpath });
     col.addSolid(x, z, 0.3, 0.3, 0, -1, 5);
   }
-  // Benches facing the sea, dustbins.
-  const benchGeo = ((): PropGeo => {
-    // Seat and backrest on two cast legs, facing +z.
-    const k = new Kit();
-    k.box('paint', 1.9, 0.07, 0.42, 0, 0.45, 0.02, C.whiteDirty);
-    k.box('paint', 1.9, 0.36, 0.06, 0, 0.72, -0.2, C.whiteDirty, 0, -0.18);
-    for (const x of [-0.78, 0.78]) {
-      k.box('metal', 0.07, 0.44, 0.4, x, 0.22, 0.02, C.cast);
-      k.box('metal', 0.07, 0.42, 0.05, x, 0.64, -0.19, C.cast);
-    }
-    return k.build();
-  })();
-  const benches: THREE.Matrix4[] = [];
+  // Dustbins along the promenade (no benches: the promenade here has none).
   const bins: THREE.Matrix4[] = [];
   const standing: NarimanResult['standing'] = [];
   for (let s = sBox1 + 16; s < sR - 20; s += rng.range(24, 32)) {
-    // Between the almond trees at the road edge, facing the sea (⚠ placement estimated).
-    const [x, z] = a.point(s, promInner(s) - 3.4);
-    benches.push(at(x, H.promenade, z, hN(s) - Math.PI / 2));
-    col.addSolid(x, z, 0.95, 0.3, -(hN(s) - Math.PI / 2), -1, 0.9);
     if (rng.chance(0.4)) {
       const [bx, bz] = a.point(s + 3, promInner(s) - 1.2);
       bins.push(at(bx, H.promenade, bz, hN(s)));
     }
   }
-  instanceProps({ geo: benchGeo, mats: benches, cull: { radius: 1.2, dist: 160, near: 20 } }, M, group, cullers);
   instanceProps({ geo: dustbin(), mats: bins, cull: { radius: 0.6, dist: 120, near: 20 } }, M, group, cullers);
 
   // Seats on the wall, standing spots at the tip.

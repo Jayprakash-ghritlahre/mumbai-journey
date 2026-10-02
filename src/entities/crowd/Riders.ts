@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import type { AmbientVolume } from '../../gfx/AmbientVolume';
 import { buildHuman, type Variant } from './HumanGeometry';
-import { CROWD_ATTRS, createCrowdDepthMaterial, createCrowdMaterial } from './CrowdMaterial';
-import type { Look } from './Crowd';
+import { CROWD_ATTRS, createCrowdDepthMaterial, createCrowdMaterial, writeLook } from './CrowdMaterial';
+import type { Look } from './Looks';
 
 const VARIANTS: Variant[] = ['man', 'woman', 'saree', 'youth', 'girl'];
 
@@ -53,7 +53,7 @@ export class Riders {
     this.counts.fill(0);
   }
 
-  /** pose: 0 standing/walking, 1 seated, 2 phone, 3 holding a rail or pole. */
+  /** pose: a POSE code (0 standing/walking, 1 seated, 2 phone, 3 holding a rail or pole, …). */
   put(look: Look, x: number, y: number, z: number, heading: number, phase: number, amp: number, pose: number): void {
     const v = look.variant;
     const s = this.slots[v];
@@ -64,15 +64,7 @@ export class Riders {
     this.p.set(x, y, z);
     this.m.compose(this.p, this.q, this.one);
     s.mesh.setMatrixAt(i, this.m);
-    const A = s.attrs;
-    A.aAnim.setXYZW(i, phase, amp, pose, look.scale);
-    A.aTop.setXYZ(i, ...look.top);
-    A.aBottom.setXYZ(i, ...look.bottom);
-    A.aAccent.setXYZ(i, ...look.accent);
-    A.aSkinHair.setXYZW(i, ...look.skin, look.hair);
-    A.aFlags.setXYZW(i, ...look.flags);
-    A.aMisc.setXYZW(i, ...look.misc);
-    A.aStyle.setXYZW(i, ...look.style);
+    writeLook(s.attrs, i, look, phase, amp * look.stride, pose);
   }
 
   end(): void {
