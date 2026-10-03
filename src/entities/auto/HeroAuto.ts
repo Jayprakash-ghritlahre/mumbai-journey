@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { RNG } from '../../core/Random';
-import type { AmbientVolume } from '../../gfx/AmbientVolume';
+import { addShaderPatch, type AmbientVolume } from '../../gfx/AmbientVolume';
+import { WEATHER, WX } from '../../gfx/Weather';
+import { RAIN_DECL } from '../../gfx/Wet';
 import { DEVA, LATIN } from '../../gfx/Signage';
 import type { StationMaterials } from '../../world/churchgate/StationMaterials';
 import { Riders } from '../crowd/Riders';
@@ -328,6 +330,83 @@ class MeterFace {
   }
 }
 
+/** The wiper: pivot (body-local), arm length, parked angle (in the screen's plane, from +x) and sweep. */
+const WIPE = { pivot: [0.18, 1.08, 0.955] as const, len: 0.58, rest: Math.atan2(0.42, -0.4), sweep: 1.55 };
+const WIPE_BINS = 16;
+
+/**
+ * Rain on the auto's glass (MONSOON.md §6): beads of water gathering on the windscreen and the clear
+ * vinyl windows, catching the light; where the wiper has just passed the screen is clear and the
+ * drops gather again until the next sweep. Beyond its arc they come and go on their own.
+ */
+function rainOnGlass(glass: THREE.MeshStandardMaterial, wipe: { uWipePass: { value: number[] }; uWipeOn: { value: number } }): void {
+  addShaderPatch(glass, 'rain-glass', (shader) => {
+    Object.assign(shader.uniforms, wipe, { uRain: WX.uRain, uRainTime: WX.uRainTime });
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGlassP;\nvarying vec3 vGlassN;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGlassP = position;\nvGlassN = normal;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vGlassP;
+        varying vec3 vGlassN;
+        uniform float uWipePass[${WIPE_BINS}];
+        uniform float uWipeOn;
+        ${RAIN_DECL}
+        float gHash(vec2 p) { return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5453); }`,
+      )
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        float gDrop = 0.0;
+        float gRim = 0.0;
+        float gHi = 0.0;
+        if (uWipeOn > 0.01) {
+          vec3 an = abs(vGlassN);
+          vec2 gp = an.z > 0.5 ? vGlassP.xy : an.x > 0.5 ? vGlassP.zy : vGlassP.xy;
+          // How long since this part of the screen was last wiped (or a slow come-and-go elsewhere).
+          vec2 rel = vGlassP.xy - vec2(${WIPE.pivot[0]}, ${WIPE.pivot[1]});
+          float ang = ${WIPE.rest.toFixed(4)} - atan(rel.y, rel.x);
+          float rr = length(rel);
+          bool screen = an.z > 0.5 && vGlassP.z > 0.5;
+          float age = 1e3;
+          if (screen && rr > 0.05 && rr < ${WIPE.len + 0.02} && ang >= 0.0 && ang <= ${WIPE.sweep.toFixed(3)}) {
+            int bin = int(clamp(ang / ${WIPE.sweep.toFixed(3)} * ${WIPE_BINS}.0, 0.0, ${WIPE_BINS - 1}.0));
+            for (int i = 0; i < ${WIPE_BINS}; i++) if (i == bin) age = uRainTime - uWipePass[i];
+          }
+          float fill = 1.6 / (0.15 + uRain);
+          for (int l = 0; l < 2; l++) {
+            float sc = l == 0 ? 0.012 : 0.0075;
+            vec2 q = gp / sc + float(l) * 0.37;
+            vec2 cell = floor(q);
+            vec2 f = fract(q) - 0.5;
+            float h = gHash(cell + float(l) * 7.1);
+            float here = age < 900.0 ? step(h * fill, age) : step(fract(uRainTime * (0.05 + 0.08 * h) + h * 3.7), 0.55 + 0.3 * uRain);
+            here *= step(fract(h * 17.3), 0.5 + 0.4 * uRain);
+            vec2 c = (vec2(fract(h * 3.1), fract(h * 5.7)) - 0.5) * 0.45;
+            float r = 0.15 + 0.2 * fract(h * 7.9);
+            vec2 dv = (f - c) * vec2(1.0, 0.85) / r;
+            float d = length(dv);
+            float inside = (1.0 - smoothstep(0.8, 1.0, d)) * here;
+            // A bead of water: clear in the middle, a dark rim where it bends the light, a highlight.
+            gDrop = max(gDrop, inside);
+            gRim = max(gRim, inside * smoothstep(0.5, 0.95, d));
+            gHi = max(gHi, inside * (1.0 - smoothstep(0.0, 0.32, length(dv - vec2(-0.32, 0.36)))));
+          }
+          gDrop *= uWipeOn;
+          gRim *= uWipeOn;
+          gHi *= uWipeOn;
+        }
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.12, 0.13, 0.14), gRim * 0.6);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0), gHi * 0.85);
+        diffuseColor.a = mix(diffuseColor.a, 0.5, max(gRim * 0.7, gHi * 0.9)) + gDrop * 0.06;`,
+      )
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.0, gDrop);')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vec3(0.5) * gHi * gHi;');
+  });
+}
+
 export class HeroAuto {
   /** On the ground under the auto's centre, turned to its heading (the owner sets position, rotation.y). */
   readonly root = new THREE.Group();
@@ -348,6 +427,14 @@ export class HeroAuto {
   private spin = 0;
   /** Where the driver is looking (radians, + left). */
   driverHead = 0;
+  /** The windscreen wiper (pivot group) and its sweep: the blade's angle, when it last passed each part of the glass. */
+  private readonly wiper = new THREE.Group();
+  private readonly wipe = { uWipePass: { value: new Array(WIPE_BINS).fill(-100) }, uWipeOn: { value: 0 } };
+  private wipeT = 0;
+  private wipeLast = 0;
+  private wipeStage = 0;
+  /** Sweeps so far (each end of the arc), for the sound. */
+  wipes = 0;
 
   constructor(mats: StationMaterials, av: AmbientVolume) {
     this.root.name = 'hero-auto';
@@ -360,6 +447,7 @@ export class HeroAuto {
     (liner.map as THREE.Texture).repeat.set(2.4, 2.4);
     const glass = new THREE.MeshStandardMaterial({ color: 0xa8bcc8, roughness: 0.04, metalness: 0.2, transparent: true, opacity: 0.14, depthWrite: false, side: THREE.DoubleSide });
     mats.add('autoGlass', glass);
+    rainOnGlass(glass, this.wipe);
     const mirror = new THREE.MeshStandardMaterial({ color: 0x6f777e, roughness: 0.12, metalness: 1 });
     mats.add('autoMirror', mirror);
     this.headMat = new THREE.MeshStandardMaterial({ color: 0xdedcd2, emissive: 0xfff1d0, emissiveIntensity: 0.05, roughness: 0.15, metalness: 0.4 });
@@ -405,8 +493,14 @@ export class HeroAuto {
     ws.rotateX(-0.11).translate(0, (W.y0 + W.y1) / 2 + 0.01, (W.z0 + W.z1) / 2);
     add(ws, glass, this.body, false);
     add(new THREE.PlaneGeometry(1.08, 0.08).rotateY(Math.PI).rotateX(0.11).translate(0, W.y1 - 0.08, W.z1 + 0.01), stickerMat, this.body, false);
-    const wiper = new Parts().rod(V(0.18, 1.08, 0.95), V(-0.22, 1.5, 0.9), 0.008, BLACK).build();
-    add(wiper, paint);
+    // The wiper: an arm and its blade on a pivot below the screen, parked up to the left; it sweeps in
+    // the rain (updateWiper).
+    const arm = new Parts().rod(V(0, 0, 0), V(Math.cos(WIPE.rest) * WIPE.len, Math.sin(WIPE.rest) * WIPE.len, 0), 0.008, BLACK).build();
+    this.wiper.position.set(WIPE.pivot[0], WIPE.pivot[1], WIPE.pivot[2]);
+    this.wiper.rotation.order = 'XYZ';
+    this.wiper.rotation.x = -0.11;
+    this.body.add(this.wiper);
+    add(arm, paint, this.wiper);
 
     // ---- The hood's finish: white piping, the quilted liner, the LED strip, clear vinyl windows -----
     const roofY = SHELL.hood.y1 - 0.06;
@@ -563,7 +657,7 @@ export class HeroAuto {
     this.body.add(this.beam, this.beam.target);
 
     // ---- The driver: khaki uniform, seated, hands on the bar ---------------------------------------
-    this.driver = new Riders(av, 2, { lod: 0, shadows: true });
+    this.driver = new Riders(av, 2, { lod: 0, shadows: true, indoor: true });
     this.body.add(this.driver.group);
     const look = man(new RNG(1979));
     look.top = KHAKI;
@@ -583,6 +677,42 @@ export class HeroAuto {
     this.ledMat.emissiveIntensity = 0.18 + night * 1.5;
     this.meterMat.emissiveIntensity = 0.75 + night * 0.4;
     this.beam.intensity = night > 0.15 ? night * 9 : 0;
+  }
+
+  /**
+   * The wiper in the rain: steady sweeps in a downpour, now and then in a lighter fall, parked when it
+   * is dry. Records when the blade crosses each part of its arc (the glass shader clears the drops there).
+   */
+  updateWiper(dt: number, time: number): void {
+    const rain = WEATHER.rain;
+    const on = WEATHER.amount > 0.3 && rain > 0.15;
+    this.wipe.uWipeOn.value = WEATHER.amount;
+    const period = 1.3;
+    // Light rain: a sweep every few seconds; heavy: continuous.
+    const pause = rain > 0.75 ? 0 : THREE.MathUtils.lerp(3.5, 0.6, rain / 0.75);
+    if (on || this.wipeT > 0) {
+      this.wipeT += dt;
+      if (this.wipeT > period + (on ? pause : 0)) this.wipeT = on ? 0.0001 : 0;
+    }
+    const k = Math.min(1, this.wipeT / period);
+    // The blade reaches each end of its arc (the sound counts them).
+    const stage = this.wipeT <= 0 ? 0 : k < 0.5 ? 1 : k < 1 ? 2 : 3;
+    if (stage !== this.wipeStage) {
+      if (stage >= 2) this.wipes++;
+      this.wipeStage = stage;
+    }
+    const s = (1 - Math.cos(k * Math.PI * 2)) / 2;
+    const angle = s * WIPE.sweep;
+    this.wiper.rotation.z = -angle;
+    // Mark the bins the blade passed over since the last frame.
+    const a0 = Math.min(angle, this.wipeLast);
+    const a1 = Math.max(angle, this.wipeLast);
+    if (a1 - a0 > 1e-4)
+      for (let i = 0; i < WIPE_BINS; i++) {
+        const b = ((i + 0.5) / WIPE_BINS) * WIPE.sweep;
+        if (b >= a0 - 0.03 && b <= a1 + 0.03) this.wipe.uWipePass.value[i] = time;
+      }
+    this.wipeLast = angle;
   }
 
   setMeter(fare: number, waitS: number, hired: boolean): void {

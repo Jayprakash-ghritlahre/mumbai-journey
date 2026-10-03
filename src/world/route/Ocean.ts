@@ -104,13 +104,60 @@ function polarGrid(radius: number, rings: number, segs: number, power: number): 
   return g;
 }
 
-// Waves travel towards the Marine Drive shore (local +x ≈ east).
+// Waves travel towards the Marine Drive shore (local +x ≈ east). The fifth is the monsoon's long
+// swell off the Arabian Sea (none in fair weather).
 const WAVES = [
   { dir: [0.96, 0.18], len: 31, amp: 0.2, q: 0.45 },
   { dir: [0.82, -0.52], len: 17, amp: 0.11, q: 0.5 },
   { dir: [0.9, 0.42], len: 9.5, amp: 0.055, q: 0.55 },
   { dir: [0.72, -0.68], len: 5.5, amp: 0.028, q: 0.55 },
+  { dir: [0.97, -0.22], len: 62, amp: 0, q: 0.3 },
 ];
+
+/** How much higher the sea stands at a monsoon high tide (m, ⚠ an estimate for the wall's look). */
+export const MONSOON_TIDE = 1.5;
+
+/** A big wave running in to the wall: impact point, when it hits (s), how big; its direction. */
+export interface Surge {
+  x: number;
+  z: number;
+  at: number;
+  strength: number;
+  /** Landward unit normal and the shore's direction. */
+  nx: number;
+  nz: number;
+}
+
+/** Shared by the vertex and fragment stages: a surge's height (and its whitewater) at p. */
+const surgeGLSL = /* glsl */ `
+uniform vec4 uSurge[4];
+uniform vec2 uSurgeN[4];
+float oceanSurge(vec2 p, float t, out float foam) {
+  float h = 0.0;
+  foam = 0.0;
+  for (int i = 0; i < 4; i++) {
+    vec4 s = uSurge[i];
+    if (s.w <= 0.0) continue;
+    vec2 n = uSurgeN[i];
+    vec2 rel = p - s.xy;
+    float off = -dot(rel, n);
+    float lat = dot(rel, vec2(-n.y, n.x));
+    float dt = s.z - t;
+    float crest = max(dt, 0.0) * 6.5;
+    float x = off - crest;
+    float side = exp(-lat * lat / (2.0 * 26.0 * 26.0)) * smoothstep(-0.5, 2.5, off);
+    float grow = 0.35 + 0.65 * (1.0 - smoothstep(10.0, 75.0, crest));
+    float alive = smoothstep(-1.6, 0.0, dt) * (1.0 - smoothstep(80.0, 95.0, crest));
+    // Steep in front (landward), long behind.
+    float shape = x < 0.0 ? exp(-x * x / (2.0 * 3.5 * 3.5)) : exp(-x * x / (2.0 * 9.0 * 9.0));
+    h += s.w * 1.7 * grow * side * shape * alive;
+    // Whitewater on the crest as it steepens, then the churned water left at the wall.
+    foam += side * shape * alive * smoothstep(45.0, 5.0, crest) * s.w * 1.3;
+    float age = -dt;
+    foam += side * (1.0 - smoothstep(0.0, 9.0, age)) * step(0.0, age) * (1.0 - smoothstep(4.0, 26.0, off)) * s.w * 1.2;
+  }
+  return h;
+}`;
 
 export class Ocean {
   readonly mesh: THREE.Mesh;
@@ -128,13 +175,21 @@ export class Ocean {
     uFoamColor: { value: new THREE.Color(0.9, 0.9, 0.86) },
     uShallow: { value: new THREE.Color(0.2, 0.22, 0.16) },
     uNightGlow: { value: 0 },
+    uRough: { value: 0 },
+    uTide: { value: 0 },
+    /** East of the shore field is inland Churchgate (no sea there, whatever the field says). */
+    uInlandX: { value: 0 },
+    uSurge: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) },
+    uSurgeN: { value: [0, 1, 2, 3].map(() => new THREE.Vector2(1, 0)) },
   };
+  private readonly baseAmp = WAVES.map((w) => w.amp);
 
   constructor(tf: TextureFactory, shore: ShoreField) {
     const normal = oceanNormals(tf);
     normal.repeat.set(1, 1);
     this.uniforms.uShore.value = shore.texture;
     this.uniforms.uShoreB.value.copy(shore.bounds);
+    this.uniforms.uInlandX.value = shore.bounds.x + 1 / shore.bounds.z;
     this.material = new THREE.MeshStandardMaterial({
       color: new THREE.Color(0.022, 0.045, 0.05),
       roughness: 0.1,
@@ -153,31 +208,40 @@ export class Ocean {
           `#include <common>
           uniform float uTime;
           uniform vec3 uOrigin;
-          uniform vec2 uWaveDir[4];
-          uniform float uWaveK[4];
-          uniform float uWaveA[4];
-          uniform float uWaveQ[4];
-          uniform float uWaveW[4];
+          uniform vec2 uWaveDir[5];
+          uniform float uWaveK[5];
+          uniform float uWaveA[5];
+          uniform float uWaveQ[5];
+          uniform float uWaveW[5];
           varying vec3 vOceanW;
           varying float vCrest;
-          varying float vDist;`,
+          varying float vDist;
+          uniform sampler2D uShore;
+          uniform vec4 uShoreB;
+          uniform float uTide;
+          uniform float uInlandX;
+          ${surgeGLSL}`,
         )
         .replace(
           '#include <beginnormal_vertex>',
           `vec3 oceanP = (modelMatrix * vec4(position, 1.0)).xyz;
           float oceanD = length(oceanP.xz - uOrigin.xz);
-          float oceanFade = 1.0 - smoothstep(120.0, 700.0, oceanD);
+          // Only the sea rises and heaves (the plane runs on under the land, out of sight).
+          vec2 shoreUVv = (oceanP.xz - uShoreB.xy) * uShoreB.zw;
+          bool shoreInV = shoreUVv.x >= 0.0 && shoreUVv.x <= 1.0 && shoreUVv.y >= 0.0 && shoreUVv.y <= 1.0;
+          float seaMask = shoreInV ? smoothstep(0.015, 0.06, texture2D(uShore, shoreUVv).r) : step(oceanP.x, uInlandX);
+          float oceanFade = (1.0 - smoothstep(120.0, 700.0, oceanD)) * seaMask;
           vec3 oceanDisp = vec3(0.0);
           vec3 oceanN = vec3(0.0, 1.0, 0.0);
           float crest = 0.0;
-          for (int i = 0; i < 4; i++) {
+          for (int i = 0; i < 5; i++) {
             // Short waves only shade (normals); long waves also displace.
             float kk = uWaveK[i];
             float ph = kk * dot(uWaveDir[i], oceanP.xz) - uWaveW[i] * uTime;
             float c = cos(ph);
             float s = sin(ph);
             float amp = uWaveA[i] * oceanFade;
-            if (i < 2) {
+            if (i < 2 || i == 4) {
               oceanDisp.xz += uWaveQ[i] * amp * uWaveDir[i] * c;
               oceanDisp.y += amp * s;
             }
@@ -185,6 +249,20 @@ export class Ocean {
             oceanN.y -= uWaveQ[i] * kk * amp * s;
             crest += s * amp;
           }
+          // A big wave running in to the wall (the slope from neighbouring samples).
+          {
+            float sf;
+            float sh = oceanSurge(oceanP.xz, uTime, sf);
+            if (sh > 0.001) {
+              float hx = oceanSurge(oceanP.xz + vec2(0.6, 0.0), uTime, sf);
+              float hz = oceanSurge(oceanP.xz + vec2(0.0, 0.6), uTime, sf);
+              oceanDisp.y += sh * seaMask;
+              oceanN.xz -= vec2(hx - sh, hz - sh) / 0.6 * seaMask;
+              crest += sh * 0.25;
+            }
+          }
+          // The monsoon's high tide; never up through the land (its ground is at road level).
+          oceanDisp.y = min(oceanDisp.y + uTide * seaMask, ${(-0.3 - H.sea).toFixed(2)});
           vCrest = crest;
           vec3 objectNormal = normalize(oceanN);
           #ifdef USE_TANGENT
@@ -207,6 +285,8 @@ export class Ocean {
           uniform vec3 uFoamColor;
           uniform vec3 uShallow;
           uniform float uNightGlow;
+          uniform float uRough;
+          ${surgeGLSL}
           varying vec3 vOceanW;
           varying float vCrest;
           varying float vDist;
@@ -223,15 +303,23 @@ export class Ocean {
           vec2 shoreUV = (vOceanW.xz - uShoreB.xy) * uShoreB.zw;
           float shoreIn = step(0.0, shoreUV.x) * step(shoreUV.x, 1.0) * step(0.0, shoreUV.y) * step(shoreUV.y, 1.0);
           float shoreD = mix(60.0, texture2D(uShore, clamp(shoreUV, 0.0, 1.0)).r * 60.0, shoreIn);
+          // The monsoon sea: churned grey-green, browner with silt near the shore.
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.04, 0.048, 0.042), uRough * 0.8);
+          vec3 shallow = mix(uShallow, vec3(0.17, 0.16, 0.11), uRough);
           // Silty, greener water close to the shore.
-          diffuseColor.rgb = mix(diffuseColor.rgb, uShallow, (1.0 - smoothstep(4.0, 45.0, shoreD)) * 0.55);
+          diffuseColor.rgb = mix(diffuseColor.rgb, shallow, (1.0 - smoothstep(4.0, 45.0 + 30.0 * uRough, shoreD)) * (0.55 + 0.2 * uRough));
           // Foam: churned water around the tetrapods, pulsing with the swell.
           float pulse = 0.5 + 0.5 * sin(uTime * 0.9 - shoreD * 0.35 + oNoise(vOceanW.xz * 0.05) * 6.0);
-          float foamBand = 1.0 - smoothstep(0.0, 9.0 + 5.0 * pulse, shoreD);
+          float foamBand = 1.0 - smoothstep(0.0, 9.0 + 5.0 * pulse + 16.0 * uRough * pulse, shoreD);
           float foamTex = oNoise(vOceanW.xz * 0.9 + vec2(uTime * 0.25, uTime * 0.1)) * 0.6 + oNoise(vOceanW.xz * 3.1 - uTime * 0.3) * 0.4;
-          float foam = smoothstep(0.45, 0.8, foamTex * (0.6 + 0.8 * foamBand)) * foamBand;
-          // Sparse whitecaps on crests.
-          foam += smoothstep(0.16, 0.3, vCrest) * smoothstep(0.62, 0.9, oNoise(vOceanW.xz * 0.35 + uTime * 0.05)) * 0.35 * (1.0 - smoothstep(80.0, 400.0, vDist));
+          float foam = smoothstep(0.45 - 0.05 * uRough, 0.8, foamTex * (0.6 + 0.8 * foamBand)) * foamBand;
+          // Whitecaps on crests (many in the monsoon, streaked by the wind).
+          float capN = oNoise(vOceanW.xz * vec2(0.35, 0.9) + uTime * 0.05);
+          foam += smoothstep(0.16 + 0.12 * uRough, 0.42 + 0.25 * uRough, vCrest) * smoothstep(0.66 - 0.08 * uRough, 0.92, capN) * (0.35 + 0.25 * uRough) * (1.0 - smoothstep(80.0, 400.0 + 300.0 * uRough, vDist));
+          // The big waves: whitewater on the breaking crest and churned at the wall after.
+          float surgeFoam;
+          oceanSurge(vOceanW.xz, uTime, surgeFoam);
+          foam += clamp(surgeFoam, 0.0, 1.0) * smoothstep(0.3, 0.75, foamTex + 0.25);
           foam = clamp(foam, 0.0, 1.0);
           diffuseColor.rgb = mix(diffuseColor.rgb, uFoamColor, foam);`,
         )
@@ -255,6 +343,7 @@ export class Ocean {
           '#include <roughnessmap_fragment>',
           `#include <roughnessmap_fragment>
           roughnessFactor = mix(roughnessFactor, 0.28, smoothstep(40.0, 1600.0, vDist));
+          roughnessFactor = mix(roughnessFactor, 0.2, uRough * 0.6);
           roughnessFactor = mix(roughnessFactor, 0.85, foam);`,
         )
         .replace(
@@ -272,12 +361,29 @@ export class Ocean {
     this.mesh.renderOrder = -1;
   }
 
-  update(time: number, camera: THREE.Camera, lamps: number): void {
+  update(time: number, camera: THREE.Camera, lamps: number, rough = 0, surges: Surge[] = []): void {
     const snap = 4;
     this.mesh.position.x = Math.round(camera.position.x / snap) * snap;
     this.mesh.position.z = Math.round(camera.position.z / snap) * snap;
-    this.uniforms.uTime.value = time;
-    this.uniforms.uOrigin.value.copy(camera.position);
-    this.uniforms.uNightGlow.value = lamps;
+    // The monsoon: a high tide, the swell up, the long Arabian Sea swell rolling in.
+    const u = this.uniforms;
+    u.uTide.value = MONSOON_TIDE * rough;
+    u.uTime.value = time;
+    u.uOrigin.value.copy(camera.position);
+    u.uNightGlow.value = lamps;
+    u.uRough.value = rough;
+    u.uWaveA.value = this.baseAmp.map((a, i) => (i === 4 ? 0.62 * rough : a * (1 + (i < 2 ? 1.9 : 1.2) * rough)));
+    for (let i = 0; i < 4; i++) {
+      const s = surges[i];
+      if (s) {
+        u.uSurge.value[i].set(s.x, s.z, s.at, s.strength);
+        u.uSurgeN.value[i].set(s.nx, s.nz);
+      } else u.uSurge.value[i].w = 0;
+    }
+  }
+
+  /** The sea level now (the monsoon's high tide). */
+  level(rough: number): number {
+    return H.sea + MONSOON_TIDE * rough;
   }
 }

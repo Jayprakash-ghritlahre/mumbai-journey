@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { WEATHER } from '../../gfx/Weather';
 import { ease, easeInOut, handheld, pose, WalkPath, type Shot } from '../../camera/Cinematic';
 import type { Crowd } from '../../entities/crowd/Crowd';
 import type { Route } from './Route';
@@ -51,6 +52,8 @@ export function routeShots(d: RouteJourneyDeps): Shot[] {
   const crossPath = new WalkPath([V(md.point(sN + 0.4, MD.kerb + 1.0)), V(md.point(sN + 0.2, MD.kerb - 3)), V(md.point(sN, 0)), V(md.point(sN - 0.3, -MD.kerb + 2)), V(md.point(sN - 0.6, -MD.kerb - 1.2))]);
   const toWall = new WalkPath([V(md.point(sN - 0.6, -MD.kerb - 1.2)), V(md.point(sN - 2.0, -20.5)), V(md.point(sN - 3.2, MD.promenade + 0.7))]);
   const wallSpot = md.point(sN - 3.2, MD.promenade + 0.7);
+  /** Big waves cued so far in the 'sea' shot (the monsoon). */
+  let seaWaves = 0;
   const seaDir = (s: number, a: number) => {
     // Unit vector out to sea at arc length s, rotated by angle a (radians, + = to the right/north).
     const t = md.at(s);
@@ -224,10 +227,20 @@ export function routeShots(d: RouteJourneyDeps): Shot[] {
       name: 'sea',
       duration: 18,
       fov: 50,
-      title: ['Arabian Sea', 'अरबी समुद्र', 'Back Bay · sunset'],
+      get title(): [string, string, string] {
+        return ['Arabian Sea', 'अरबी समुद्र', WEATHER.amount > 0.5 ? 'Back Bay · monsoon high tide' : 'Back Bay · sunset'];
+      },
       titleAt: 3,
       titleFor: 8,
+      // In the monsoon two big waves break on the wall in view while the title is up and after.
+      enter: () => {
+        seaWaves = 0;
+      },
       update: (t, c) => {
+        if (WEATHER.amount > 0.5 && seaWaves < 2 && t > (seaWaves ? 0.6 : 0.2)) {
+          seaWaves++;
+          r.sea.cueInView(c.camera, 3, 1.2 + 0.15 * seaWaves);
+        }
         const cam = V(wallSpot, EYE + 0.05);
         const e = easeInOut(t);
         const a = THREE.MathUtils.lerp(-0.35, 0.55, e);

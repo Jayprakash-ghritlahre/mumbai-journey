@@ -477,21 +477,65 @@ export class SeaBed {
     b.start();
   }
 
-  /** `near`: closest point on the sea wall; `d`: listener distance to it (metres). */
-  update(dt: number, near: THREE.Vector3, d: number): void {
+  /**
+   * `near`: closest point on the sea wall; `d`: listener distance to it (metres); `rough`: the
+   * monsoon sea (0 … 1): a heavier, deeper wash, the swell breaking more often and harder.
+   */
+  update(dt: number, near: THREE.Vector3, d: number, rough = 0): void {
     const t = this.a.ctx.currentTime;
     this.a.setPos(this.out.panner, near);
-    const level = Math.max(0, 1 - d / 260);
+    const level = Math.max(0, 1 - d / (260 + 140 * rough));
     this.phase += dt;
     // Swell every ~7 s: the wash rises, brightens and falls back.
     const swell = 0.55 + 0.45 * Math.sin(this.phase * 0.9) * Math.sin(this.phase * 0.37 + 1.3);
-    this.wash.gain.setTargetAtTime(level * (0.18 + 0.22 * swell), t, 0.4);
-    this.washLP.frequency.setTargetAtTime(500 + 900 * swell, t, 0.4);
+    this.wash.gain.setTargetAtTime(level * (0.18 + 0.22 * swell) * (1 + 1.3 * rough), t, 0.4);
+    this.washLP.frequency.setTargetAtTime((500 + 900 * swell) * (1 - 0.25 * rough), t, 0.4);
     this.wind.gain.setTargetAtTime(0.04 + 0.12 * Math.max(0, 1 - d / 80) * (0.7 + 0.3 * Math.sin(this.phase * 0.23)), t, 1.0);
-    if (d < 120 && t > this.nextSplash) {
-      this.nextSplash = t + rnd(3.5, 8);
-      this.splash(near.clone().add(new THREE.Vector3(rnd(-18, 18), -1.5, rnd(-18, 18))), level);
+    if (d < 120 + 80 * rough && t > this.nextSplash) {
+      this.nextSplash = t + rnd(3.5, 8) * (1 - 0.6 * rough);
+      this.splash(near.clone().add(new THREE.Vector3(rnd(-18, 18), -1.5, rnd(-18, 18))), level * (1 + 0.8 * rough));
     }
+  }
+
+  /**
+   * A big wave hitting the wall (the monsoon): a deep boom through the concrete, the roar of the
+   * water thrown up, and the hiss of the spray falling back. `strength` 0.15 … 1.4.
+   */
+  crash(pos: THREE.Vector3, strength: number, listener: THREE.Vector3): void {
+    const ctx = this.a.ctx;
+    const d = pos.distanceTo(listener);
+    const level = Math.max(0, 1 - d / 320) * Math.min(1.4, strength);
+    if (level < 0.02) return;
+    const t = ctx.currentTime + 0.02;
+    const out = this.a.spatialOut(pos, 14, 0.7, 0.35);
+    const boom = this.a.noiseSource('brown', false);
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 110;
+    const bg = ctx.createGain();
+    env(bg.gain, t, 0.03, 0.12, 1.4, 0.9 * level);
+    boom.connect(lp).connect(bg).connect(out.input);
+    const roar = this.a.noiseSource('pink', false);
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(500, t);
+    bp.frequency.exponentialRampToValueAtTime(1600, t + 0.8);
+    bp.Q.value = 0.5;
+    const rg = ctx.createGain();
+    env(rg.gain, t, 0.08, 0.5, 2.4, 0.45 * level);
+    roar.connect(bp).connect(rg).connect(out.input);
+    const hiss = this.a.noiseSource('white', false);
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 2800;
+    const hg = ctx.createGain();
+    env(hg.gain, t + 0.6, 0.4, 0.8, 2.6, 0.16 * level);
+    hiss.connect(hp).connect(hg).connect(out.input);
+    for (const n of [boom, roar, hiss]) {
+      n.start(t);
+      n.stop(t + 5.5);
+    }
+    hiss.onended = () => out.panner.disconnect();
   }
 
   private splash(pos: THREE.Vector3, level: number): void {

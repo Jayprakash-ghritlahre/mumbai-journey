@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { addShaderPatch, type AmbientVolume } from '../../gfx/AmbientVolume';
+import { WX } from '../../gfx/Weather';
 import { JOINT } from './HumanGeometry';
 import type { Look } from './Looks';
 
@@ -22,12 +23,20 @@ export const CROWD_ATTRS: [string, number][] = [
 export const EXTRA = { earrings: 1, bindi: 2, glasses: 4, sunglasses: 8, crop: 16, lipstick: 32, child: 64, collar: 128 } as const;
 
 /**
- * Pose code: base + 8 × side + 32 × act. base: 0 stand / walk, 1 seated, 2 phone, 3 holding a
+ * Pose code: base + 8 × side + 32 × act (+ 128 inside a train; a fraction folds the umbrella). base: 0 stand / walk, 1 seated, 2 phone, 3 holding a
  * pole, 4 taking a photo, 5 riding (seated, hands forward on a handlebar; the phase slot turns the
  * head, radians). side: where the partner is (1 on +x, 2 on −x). act: 1 leaning on the partner
  * (head on the shoulder), 2 holding hands, 3 talking.
  */
-export const POSE = { stand: 0, sit: 1, phone: 2, grab: 3, photo: 4, drive: 5, partnerPlusX: 8, partnerMinusX: 16, lean: 32, hands: 64, talk: 96 } as const;
+export const POSE = { stand: 0, sit: 1, phone: 2, grab: 3, photo: 4, drive: 5, partnerPlusX: 8, partnerMinusX: 16, lean: 32, hands: 64, talk: 96, inside: 128 } as const;
+
+/**
+ * A pose code for someone stepping aboard: `closing` (0 … 1) folds their umbrella as they reach the
+ * door. Add POSE.inside for anyone in a train (umbrellas folded and put away).
+ */
+export function closingPose(pose: number, closing: number): number {
+  return pose + Math.min(1, Math.max(0, closing)) * 0.98;
+}
 
 const J = JOINT;
 
@@ -49,14 +58,71 @@ varying float vRegion;
 varying float vPart;
 varying float vMoustache;
 varying float vExtras;
+varying float vCrowdWet;
+// The monsoon (MONSOON.md §4): x monsoon, y umbrellas open, z heavy rain; indoors (the coach, the
+// auto): umbrellas folded; the light map tells who is out under the open sky.
+uniform vec4 uCrowdRain;
+uniform float uCrowdIndoor;
+uniform sampler2D uAVMap;
+uniform vec4 uAVBounds;
+/** This person's rain gear: 0 none, 1 an umbrella, 2 a raincoat (fixed for each person). */
+float crowdGear = 0.0;
+/** Out under the open sky (0 … 1), smoothed over a few metres so a short gap does not flick it. */
+float crowdOut = 0.0;
+/** How far the umbrella is up (0 folded and carried at the side … 1 open over the head). */
+float crowdOpen = 0.0;
+float crowdPose = 0.0;
 
 mat3 crowdRotX(float a) { float c = cos(a), s = sin(a); return mat3(1.0, 0.0, 0.0, 0.0, c, s, 0.0, -s, c); }
 mat3 crowdRotY(float a) { float c = cos(a), s = sin(a); return mat3(c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c); }
 mat3 crowdRotZ(float a) { float c = cos(a), s = sin(a); return mat3(c, s, 0.0, -s, c, 0.0, 0.0, 0.0, 1.0); }
+/** Rotation by a about the unit axis k. */
+mat3 crowdRotAxis(vec3 k, float a) {
+  float c = cos(a), s = sin(a), t = 1.0 - c;
+  return mat3(t * k.x * k.x + c, t * k.x * k.y + s * k.z, t * k.x * k.z - s * k.y,
+              t * k.x * k.y - s * k.z, t * k.y * k.y + c, t * k.y * k.z + s * k.x,
+              t * k.x * k.z + s * k.y, t * k.y * k.z - s * k.x, t * k.z * k.z + c);
+}
 
 float crowdPart() { return mod(floor(aTag + 0.5), 32.0); }
 float crowdRegion() { return floor((floor(aTag + 0.5) + 0.5) / 32.0); }
 bool crowdBit(float v, float b) { return mod(floor((v + 0.5) / b), 2.0) > 0.5; }
+
+/** A number fixed for each person (from their colours). */
+float crowdHash(float k) { return fract(sin(aCol0.x * 0.000123 + aCol1.x * 0.0000917 + aCol0.w * 0.0000371 + aCol0.y * 0.0000213 + k) * 43758.5453); }
+
+/** Sky visibility at a point (1 open sky; under a roof or canopy less), from the light map. */
+float crowdSkyAt(vec3 wp) {
+  vec2 uv = (wp.xz - uAVBounds.xy) * uAVBounds.zw;
+  float inb = step(0.0, uv.x) * step(uv.x, 1.0) * step(0.0, uv.y) * step(uv.y, 1.0);
+  vec4 s = texture2D(uAVMap, clamp(uv, 0.0, 1.0));
+  float ceilH = s.b * 40.0;
+  float above = ceilH > 0.5 ? step(ceilH, wp.y) : 1.0;
+  return mix(1.0, mix(s.r, 1.0, above), inb);
+}
+
+/** Out in the rain: the open sky here and a few metres round (people do not open up for a short gap). */
+float crowdExposed(bool inside) {
+  if (uCrowdIndoor > 0.5 || inside) return 0.0;
+  vec3 wp = (modelMatrix * instanceMatrix * vec4(0.0, 1.7, 0.0, 1.0)).xyz;
+  float s = crowdSkyAt(wp) * 0.4;
+  s += 0.15 * (crowdSkyAt(wp + vec3(2.5, 0.0, 0.0)) + crowdSkyAt(wp - vec3(2.5, 0.0, 0.0)) + crowdSkyAt(wp + vec3(0.0, 0.0, 2.5)) + crowdSkyAt(wp - vec3(0.0, 0.0, 2.5)));
+  return smoothstep(0.55, 0.85, s);
+}
+
+/**
+ * Who has what in the rain (fixed for each person, wherever they are): riders on two-wheelers mostly
+ * in raincoats, schoolchildren too, some grown-ups; most of the rest carry an umbrella.
+ */
+float crowdRainGear(float pose) {
+  if (uCrowdRain.x < 0.01) return 0.0;
+  float h = crowdHash(1.7);
+  bool child = crowdBit(aWear.w, 64.0);
+  float pCoat = (pose == 5.0 ? 0.72 : child ? 0.55 : 0.15) * uCrowdRain.x;
+  if (h < pCoat) return 2.0;
+  if (pose == 5.0 || pose == 4.0) return 0.0;
+  return h < pCoat + 0.62 * uCrowdRain.x ? 1.0 : 0.0;
+}
 
 /** sRGB hex packed in a float → linear colour. */
 vec3 crowdUnpack(float v) {
@@ -116,6 +182,11 @@ void crowdShape(inout vec3 p, float part, float region) {
 }
 
 bool crowdHidden(float region) {
+  // The umbrella: up, or folded and carried at the side while standing or walking (else put away).
+  if (region == 29.0 || region == 31.0) return crowdGear != 1.0 || (crowdOpen < 0.01 && crowdPose != 0.0);
+  if (region == 30.0) return crowdGear != 2.0;
+  // Under the hood: the hair tied up out of sight, no cap or earrings, the dupatta inside.
+  if (crowdGear == 2.0 && (region == 10.0 || region == 11.0 || region == 27.0 || region == 28.0 || region == 9.0 || region == 26.0 || region == 20.0)) return true;
   float bagT = floor(aFlags.y + 0.5);
   float hs = floor(aStyle.y + 0.5);
   float bt = floor(aStyle.z + 0.5);
@@ -147,10 +218,18 @@ void crowdAnimate(inout vec3 p, inout vec3 n) {
   crowdShape(p, part, region);
   float ph = aAnim.x;
   float amp = aAnim.y;
-  float code = floor(aAnim.z + 0.5);
+  // Pose code (POSE): + 128 inside a train; a fraction on top folds the umbrella (stepping aboard).
+  float code = floor(aAnim.z + 0.002);
+  bool inside = code >= 128.0;
+  float closing = inside ? 1.0 : fract(aAnim.z + 0.002) / 0.98;
+  code = mod(code, 128.0);
   float pose = mod(code, 8.0);
   float side = mod(floor(code / 8.0), 4.0);
-  float act = floor(code / 32.0);
+  float act = mod(floor(code / 32.0), 4.0);
+  crowdPose = pose;
+  crowdOut = uCrowdRain.x > 0.01 ? crowdExposed(inside) : 0.0;
+  crowdGear = crowdRainGear(pose);
+  if (crowdGear == 1.0) crowdOpen = crowdOut * (1.0 - closing);
   float sgn = side == 1.0 ? 1.0 : side == 2.0 ? -1.0 : 0.0;
   float legL = sin(ph) * 0.48 * amp;
   float legR = -legL;
@@ -195,6 +274,23 @@ void crowdAnimate(inout vec3 p, inout vec3 n) {
     if (sgn > 0.0) { elbowR = max(elbowR, 0.5 + 0.9 * g); armR += 0.25 * g; }
     else { elbowL = max(elbowL, 0.5 + 0.9 * g); armL += 0.25 * g; }
   }
+  if (crowdGear == 1.0 && (crowdOpen > 0.0 || pose == 0.0)) {
+    // The umbrella held up in the right hand close over the head (a steadier walk under it), or
+    // lowered, folded, and carried at the side with a short swing.
+    float up = pose == 0.0 ? smoothstep(0.0, 0.4, crowdOpen) : 1.0;
+    armR = mix(armR * 0.3, 0.15, up); elbowR = mix(0.22, 1.75, up); abdR = mix(0.0, -0.22, up);
+    twist *= mix(1.0, 0.5, up);
+  } else if (crowdOut > 0.5 && pose == 0.0 && amp > 0.3) {
+    // Caught out in it: head down, shoulders hunched, leaning into the rain.
+    lean += (0.07 + 0.08 * uCrowdRain.z) * uCrowdRain.x;
+    headPitch += 0.2 * uCrowdRain.x;
+    armL *= 1.0 - 0.4 * uCrowdRain.x;
+    armR *= 1.0 - 0.4 * uCrowdRain.x;
+    elbowL += 0.35 * uCrowdRain.x;
+    elbowR += 0.35 * uCrowdRain.x;
+  } else if (crowdGear == 2.0) {
+    headPitch += 0.08;
+  }
   vec3 hipL = vec3(-${J.hipX}, ${J.hipY}, 0.0);
   vec3 hipR = vec3(${J.hipX}, ${J.hipY}, 0.0);
   vec3 kneeLp = vec3(-${J.hipX}, ${J.kneeY}, 0.0);
@@ -226,6 +322,44 @@ void crowdAnimate(inout vec3 p, inout vec3 n) {
       }
     }
   }
+  if (part == 13.0 && crowdGear == 1.0) {
+    // The umbrella (built open, held up): its canopy, sized for this person, folds down along the
+    // shaft as it closes; closed, it is lowered to hang from the hand at the side.
+    vec3 A = vec3(0.07, 2.03, 0.15);
+    vec3 G = vec3(0.14, 1.17, 0.3);
+    vec3 D = normalize(A - G);
+    float fold = smoothstep(0.3, 1.0, crowdOpen);
+    if (region == 29.0) {
+      float size = 0.85 + 0.38 * crowdHash(9.1);
+      vec3 v = p - A;
+      float ax = dot(v, D);
+      vec3 rv = v - ax * D;
+      float r = length(rv);
+      vec3 rn = r > 1e-4 ? rv / r : vec3(1.0, 0.0, 0.0);
+      p = A + D * mix(-r * 1.1, ax * size, fold) + rn * mix(0.02 + 0.06 * r, r * size, fold);
+      n = normalize(mix(rn, n, fold));
+    }
+    if (pose == 0.0) {
+      float down = 1.0 - smoothstep(0.0, 0.4, crowdOpen);
+      if (down > 0.0) {
+        mat3 Rl = crowdRotX(down * 3.0);
+        p = mix(G, vec3(0.185, 0.86, 0.05), down) + Rl * (p - G);
+        n = Rl * n;
+      }
+    }
+    // Someone right beside you tips their open umbrella away from you, as people do passing close.
+    if (crowdOpen > 0.0) {
+      vec3 camL = (inverse(modelMatrix * instanceMatrix) * vec4(cameraPosition, 1.0)).xyz;
+      float dh = length(camL.xz);
+      float tip = (1.0 - smoothstep(0.8, 1.8, dh)) * step(camL.y, 2.4) * crowdOpen;
+      if (tip > 0.0 && dh > 1e-3) {
+        vec2 d = camL.xz / dh;
+        mat3 Rt = crowdRotAxis(vec3(-d.y, 0.0, d.x), 0.6 * tip);
+        p = G + Rt * (p - G);
+        n = Rt * n;
+      }
+    }
+  }
   // Seated, a pallu or dupatta hanging down the back folds onto the seat.
   if ((pose == 1.0 || pose == 5.0) && part == 0.0 && p.z < -0.06) p.y = max(p.y, ${J.hipY} - 0.02);
   if (part == 1.0) {
@@ -234,7 +368,7 @@ void crowdAnimate(inout vec3 p, inout vec3 n) {
     p = nk + R * (p - nk); n = R * n;
   }
   // Upper body: forward lean, counter-twist and a sideways lean.
-  bool upper = part == 0.0 || part == 1.0 || part >= 6.0 && part <= 9.0 || part == 11.0 || part == 12.0;
+  bool upper = part == 0.0 || part == 1.0 || part >= 6.0 && part <= 9.0 || part == 11.0 || part == 12.0 || part == 13.0;
   if (upper) {
     R = crowdRotY(twist) * crowdRotX(lean) * crowdRotZ(roll);
     p = vec3(0.0, ${J.hipY}, 0.0) + R * (p - vec3(0.0, ${J.hipY}, 0.0)); n = R * n;
@@ -272,6 +406,29 @@ vec3 crowdColour(float r) {
   else if (r == 19.0 || r == 20.0) v = aCol1.y;
   else if (r == 22.0) v = floor(aStyle.x + 0.5) == 2.0 ? skin : aCol1.z;
   else if (r == 23.0) return vec3(0.8, 0.8, 0.77);
+  else if (r == 29.0) {
+    // Umbrellas: mostly the black one, then navy, maroon, a print in the accent colour, pink, green.
+    float u = crowdHash(3.1);
+    if (u < 0.5) return vec3(0.012, 0.012, 0.014);
+    if (u < 0.58) return vec3(0.015, 0.022, 0.07);
+    if (u < 0.65) return vec3(0.09, 0.012, 0.018);
+    if (u < 0.72) return vec3(0.02, 0.06, 0.3);
+    if (u < 0.77) return vec3(0.32, 0.02, 0.02);
+    if (u < 0.82) return vec3(0.3, 0.05, 0.13);
+    if (u < 0.87) return vec3(0.02, 0.07, 0.035);
+    if (u < 0.92) return vec3(0.4, 0.3, 0.02);
+    return crowdUnpack(aCol0.z);
+  } else if (r == 30.0) {
+    // Raincoats: navy, black, olive, maroon, a bright one for a child, royal blue, clear grey plastic.
+    float c = crowdHash(5.3);
+    if (crowdBit(aWear.w, 64.0) && c < 0.6) return c < 0.3 ? vec3(0.62, 0.42, 0.015) : vec3(0.5, 0.06, 0.08);
+    if (c < 0.3) return vec3(0.018, 0.025, 0.07);
+    if (c < 0.48) return vec3(0.012, 0.012, 0.014);
+    if (c < 0.6) return vec3(0.05, 0.06, 0.028);
+    if (c < 0.7) return vec3(0.1, 0.018, 0.022);
+    if (c < 0.85) return vec3(0.03, 0.07, 0.24);
+    return vec3(0.28, 0.3, 0.31);
+  } else if (r == 31.0) return vec3(0.03, 0.028, 0.026);
   return crowdUnpack(v);
 }
 
@@ -282,6 +439,8 @@ float crowdPattern(float r) {
   bool topLike = r == 1.0 || r == 17.0 || (r == 18.0 && !crowdBit(aWear.w, 16.0)) || (r == 13.0 && bt >= 2.0)
     || (layer != 1.0 && ((r == 14.0 && aStyle.w > 0.5) || (r == 15.0 && aStyle.w > 1.5)));
   bool bottomLike = r == 2.0 || r == 16.0 || (r == 13.0 && bt == 1.0) || (r == 12.0 && bt != 1.0 && bt != 2.0);
+  // A few umbrellas have panels in two colours.
+  if (r == 29.0) return crowdHash(3.1) > 0.82 ? 9.0 : 0.0;
   return topLike ? aFlags.w : bottomLike ? aMisc.z : 0.0;
 }
 `;
@@ -301,7 +460,7 @@ function patchVertex(shader: THREE.WebGLProgramParametersWithUniforms, withColou
       '#include <begin_vertex>',
       `#include <begin_vertex>
       transformed = crowdPos;
-      ${withColour ? 'vRegion = crowdRegion(); vPart = crowdPart(); vCrowdColor = crowdColour(vRegion); vCrowdAccent = crowdUnpack(aCol0.z); vObjPos = position; vPattern = crowdPattern(vRegion); vMoustache = step(aMisc.w, 0.0); vExtras = aWear.w;' : ''}`,
+      ${withColour ? 'vRegion = crowdRegion(); vPart = crowdPart(); vCrowdColor = crowdColour(vRegion); vCrowdAccent = crowdUnpack(aCol0.z); vObjPos = position; vPattern = crowdPattern(vRegion); vMoustache = step(aMisc.w, 0.0); vExtras = aWear.w; vCrowdWet = crowdOpen < 0.5 && crowdGear != 2.0 ? crowdOut * uCrowdRain.x : 0.0;' : ''}`,
     );
 }
 
@@ -346,6 +505,10 @@ const fragmentPatch = /* glsl */ `
   } else if (pat == 8.0) {
     // Fine vertical stripes / ribbed knit.
     cc *= 0.84 + 0.16 * step(0.5, fract(atan(q.x, q.z) * 4.8 + q.x * 30.0));
+  } else if (pat == 9.0) {
+    // An umbrella's panels, every other one in the accent colour.
+    float panel = floor((atan(q.x - 0.07, q.z - 0.15) + 3.14159) / 0.7854);
+    cc = mix(cc, vCrowdAccent, mod(panel, 2.0));
   }
   // Faces: eyes, brows and mouth; a moustache on many men; a bindi, spectacles or sunglasses, lipstick.
   if (floor(vPart + 0.5) == 1.0 && reg == 0.0 && q.z > 0.05) {
@@ -370,10 +533,12 @@ const fragmentPatch = /* glsl */ `
   diffuseColor.rgb *= cc;
 }`;
 
-export function createCrowdMaterial(av: AmbientVolume): THREE.MeshStandardMaterial {
+export function createCrowdMaterial(av: AmbientVolume, opts: { indoor?: boolean } = {}): THREE.MeshStandardMaterial {
   const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.78, metalness: 0 });
   mat.name = 'crowd';
+  const indoor = { value: opts.indoor ? 1 : 0 };
   addShaderPatch(mat, 'crowd', (shader) => {
+    Object.assign(shader.uniforms, { uCrowdRain: WX.uCrowdRain, uCrowdIndoor: indoor });
     patchVertex(shader, true);
     shader.fragmentShader = shader.fragmentShader
       .replace(
@@ -386,18 +551,27 @@ export function createCrowdMaterial(av: AmbientVolume): THREE.MeshStandardMateri
         varying float vRegion;
         varying float vPart;
         varying float vMoustache;
-        varying float vExtras;`,
+        varying float vExtras;
+        varying float vCrowdWet;`,
       )
-      .replace('#include <color_fragment>', '#include <color_fragment>\n' + fragmentPatch);
+      .replace('#include <color_fragment>', '#include <color_fragment>\n' + fragmentPatch)
+      .replace(
+        '#include <roughnessmap_fragment>',
+        `#include <roughnessmap_fragment>
+        // Raincoats and umbrellas shine wet; clothes out in the rain go darker.
+        roughnessFactor = mix(roughnessFactor, 0.3, step(28.5, vRegion));
+        diffuseColor.rgb *= 1.0 - 0.2 * vCrowdWet * step(0.5, vRegion) * step(vRegion, 28.5);`,
+      );
   });
   av.patch(mat);
   return mat;
 }
 
 /** Depth material for shadows that runs the same skinning. */
-export function createCrowdDepthMaterial(): THREE.MeshDepthMaterial {
+export function createCrowdDepthMaterial(av: AmbientVolume, opts: { indoor?: boolean } = {}): THREE.MeshDepthMaterial {
   const mat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
   mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, { uCrowdRain: WX.uCrowdRain, uCrowdIndoor: { value: opts.indoor ? 1 : 0 }, uAVMap: av.uniforms.uAVMap, uAVBounds: av.uniforms.uAVBounds });
     shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\n' + vertexHead);
     // MeshDepthMaterial has no normal chunks; animate position only.
     shader.vertexShader = shader.vertexShader.replace(
@@ -406,7 +580,7 @@ export function createCrowdDepthMaterial(): THREE.MeshDepthMaterial {
       { vec3 nn = vec3(0.0, 1.0, 0.0); vec3 pp = position; crowdAnimate(pp, nn); transformed = pp; }`,
     );
   };
-  mat.customProgramCacheKey = () => 'crowd-depth-2';
+  mat.customProgramCacheKey = () => (opts.indoor ? 'crowd-depth-3-in' : 'crowd-depth-3');
   return mat;
 }
 

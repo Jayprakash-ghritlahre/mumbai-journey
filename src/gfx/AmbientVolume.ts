@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { wetKind, wetPatch } from './Wet';
 
 /**
  * A top-down "light probe map" standing in for baked global illumination.
@@ -202,10 +203,15 @@ export class AmbientVolume {
             float avLamp = avS.g * avIn * (1.0 - avAbove * 0.8);
             ${mode === 'roof' ? 'avLamp *= gl_FrontFacing ? 0.0 : 0.6;' : ''}
             reflectedLight.indirectDiffuse += uAVLamp * avLamp * diffuseColor.rgb;
+            // Wet ground and puddles glint with the lamps' light (Wet.ts).
+            reflectedLight.indirectSpecular += uAVLamp * avLamp * (wxW * 0.03 + wxP * 0.06) * pow(1.0 - saturate(dot(normal, normalize(vViewPosition))), 4.0);
           }
           #include <aomap_fragment>`,
         );
     });
+    // Rain on it (the monsoon): by what the material is (its name).
+    const kind = wetKind(material.name);
+    addShaderPatch(material, 'wet-' + kind, wetPatch(kind));
   }
 }
 

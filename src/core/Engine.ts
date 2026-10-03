@@ -13,7 +13,8 @@ import { N8AOPostPass } from 'n8ao';
 import { FogEffect, GradeEffect } from '../gfx/PostEffects';
 import { VolumetricPass } from '../gfx/VolumetricLight';
 import { SkyDome } from '../gfx/SkyDome';
-import { computeLighting, type LightingState } from '../gfx/TimeOfDay';
+import { applyWeather, computeLighting, type LightingState } from '../gfx/TimeOfDay';
+import { WetReflectionEffect } from '../gfx/WetReflections';
 
 export type Quality = 'low' | 'medium' | 'high';
 
@@ -70,6 +71,11 @@ export class Engine {
   private bloom!: BloomEffect;
   aoPass: N8AOPostPass | null = null;
   private volumetric: VolumetricPass | null = null;
+  private wetPass: EffectPass | null = null;
+  private wetFx: WetReflectionEffect | null = null;
+  /** The hour lit for, and the weather over it (Weather.ts): how far the monsoon is in, the rain. */
+  private hour = 17.85;
+  private wx = { m: 0, rain: 0, litM: 0, litRain: 0, at: 0 };
   /** Ambient-volume texture (sky visibility) used where rays leave the shadow frustum. */
   avSource: { map: THREE.Texture | null; bounds: THREE.Vector4 } | null = null;
   private readonly pmrem: THREE.PMREMGenerator;
@@ -125,6 +131,15 @@ export class Engine {
       multisampling: Math.min(q.msaa, this.renderer.capabilities.maxSamples),
     });
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+    // Reflections in the wet streets (needs the frame's alpha straight from the render).
+    this.wetPass = null;
+    this.wetFx = null;
+    if (this.quality !== 'low') {
+      this.wetFx = new WetReflectionEffect();
+      this.wetPass = new EffectPass(this.camera, this.wetFx);
+      this.wetPass.enabled = this.wx.m > 0.02;
+      this.composer.addPass(this.wetPass);
+    }
     this.volumetric = null;
     if (q.volumetric) {
       this.volumetric = new VolumetricPass();
@@ -187,7 +202,30 @@ export class Engine {
   }
 
   setHour(hour: number): void {
-    computeLighting(hour, this.lighting.cloudCover, this.lighting);
+    this.hour = hour;
+    this.relight();
+  }
+
+  /**
+   * The weather over the time of day: `m` how far the monsoon has set in, `rain` the fall now. The
+   * light is recomputed (and the sky's environment map rebuilt) only when they have moved on
+   * enough, and at most a few times a second.
+   */
+  setWeather(m: number, rain: number): void {
+    this.wx.m = m;
+    this.wx.rain = rain;
+    const now = performance.now();
+    const moved = Math.abs(m - this.wx.litM) > 0.015 || Math.abs(rain - this.wx.litRain) > 0.05 || (m !== this.wx.litM && (m === 0 || m === 1));
+    if (moved && now - this.wx.at > 300) this.relight();
+    if (this.wetPass) this.wetPass.enabled = m > 0.02;
+  }
+
+  private relight(): void {
+    computeLighting(this.hour, 0.32, this.lighting);
+    applyWeather(this.lighting, this.wx.m, this.wx.rain);
+    this.wx.litM = this.wx.m;
+    this.wx.litRain = this.wx.rain;
+    this.wx.at = performance.now();
     this.envDirty = true;
   }
 
@@ -231,6 +269,7 @@ export class Engine {
     f.u<number>('uVolG').value = THREE.MathUtils.lerp(0.72, 0.45, ind);
     f.u<number>('uVolIso').value = THREE.MathUtils.lerp(0.1, 0.35, ind);
     f.u<number>('uSunDirect').value = 1;
+    f.u<number>('uFarHaze').value = s.overcast * (0.6 + 0.4 * s.rain);
 
     const g = this.grade;
     g.u<THREE.Color>('uLift').value.copy(s.grade.lift);
@@ -291,6 +330,7 @@ export class Engine {
     this.updateShadowFrustum();
     this.camera.updateMatrixWorld();
     this.fog.setCamera(this.camera);
+    if (this.wetFx && this.wetPass?.enabled) this.wetFx.setCamera(this.camera, Math.min(1, this.wx.m * 1.2), time);
     if (this.volumetric) {
       this.volumetric.setInputs(this.camera, this.sun, this.avSource, this.lighting.sunIntensity > 0.05);
       this.fog.u<THREE.Texture>('uVolTex').value = this.volumetric.target.texture;

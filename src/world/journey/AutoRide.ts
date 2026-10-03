@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { WEATHER, WX } from '../../gfx/Weather';
 import { RNG } from '../../core/Random';
 import type { Input } from '../../core/Input';
 import type { ExploreControls } from '../../camera/ExploreControls';
@@ -125,11 +126,23 @@ export class AutoRide {
     this.hero = new HeroAuto(mats, mira.av);
     this.hero.root.visible = false;
     mira.group.add(this.hero.root);
-    this.you = new Riders(mira.av, 1, { lod: 0, shadows: true });
+    this.you = new Riders(mira.av, 1, { lod: 0, shadows: true, indoor: true });
     mira.group.add(this.you.group);
     const look = youngMan(new RNG(2026));
     look.flags = [1, 0, look.flags[2], look.flags[3]];
     this.youLook = look;
+  }
+
+  /** The wiper's sweeps so far (the rain's sound thunks each). */
+  get wipes(): number {
+    return this.hero.wipes;
+  }
+
+  /** The auto's body frame while it is out (its cabin stays dry in the rain), else null. */
+  cabin(): THREE.Matrix4 | null {
+    if (!this.hero.root.visible || !this.mira.group.visible) return null;
+    this.hero.body.updateWorldMatrix(true, false);
+    return this.hero.body.matrixWorld;
   }
 
   /** The camera is the ride's (seated, or a short scene). */
@@ -567,8 +580,11 @@ export class AutoRide {
   private drive(dt: number, sEnd: number): void {
     const r = this.route;
     const at = r.at(this.s);
-    const stopCurve = (d: number) => (d <= 0.12 ? 0 : Math.sqrt(2 * 1.5 * (d - 0.12)));
-    let target = r.profile(this.s);
+    // In the rain the driver takes it easier: slower, braking earlier on the wet road.
+    const wet = WEATHER.amount;
+    const brake = 1.5 * (1 - 0.25 * wet);
+    const stopCurve = (d: number) => (d <= 0.12 ? 0 : Math.sqrt(2 * brake * (d - 0.12)));
+    let target = r.profile(this.s) * (1 - 0.16 * wet - 0.06 * WEATHER.heavy);
     target = Math.min(target, stopCurve(sEnd - this.s));
     if (this.phase === 'ride') {
       // Give way before crossing Poonam Sagar Road's southbound side.
@@ -739,6 +755,7 @@ export class AutoRide {
     this.hero.setLights(this.night, this.a < -0.9 || (this.v < 0.3 && this.phase !== 'away'));
     this.hero.setMeter(this.fare, this.waitS, this.hired);
     this.hero.update(this.v * dt, this.steer, this.pitchB, this.rollB, this.heave + shake, this.t);
+    this.hero.updateWiper(dt, WX.uRainTime.value);
     this.mira.auto.traffic.obstacles = [{ x: at.x, z: at.z, h: at.h, len: AUTO.length, half: AUTO.half }];
   }
 

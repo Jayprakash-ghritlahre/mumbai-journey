@@ -24,6 +24,7 @@ uniform float uVolStrength;
 uniform float uSunDirect;
 uniform float uVolG;
 uniform float uVolIso;
+uniform float uFarHaze;
 
 float hgPhase(float mu, float g) {
   float g2 = g * g;
@@ -54,7 +55,15 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth,
   float mu = max(muS, 0.0);
   vec3 scatter = uFogColor + uSunColor * (pow(mu, 6.0) * 0.32 + pow(mu, 40.0) * 0.55) * uSunScatter;
   vec3 hazeCol = mix(scatter, uLocalHazeColor, clamp(uLocalHaze * 6.0, 0.0, 1.0) * (1.0 - exp(-L / 60.0)) * 0.5);
-  vec3 col = inputColor.rgb * T + hazeCol * (1.0 - T);
+  vec3 farCol = inputColor.rgb;
+  if (uFarHaze > 0.0 && !sky) {
+    // Rain haze: beyond the near streets the city greys and pales with distance; lit windows and
+    // lamps (bright in HDR) still show through it.
+    float lum = dot(farCol, vec3(0.2126, 0.7152, 0.0722));
+    float farK = smoothstep(60.0, 900.0, L) * uFarHaze * (1.0 - smoothstep(1.5, 5.0, lum * uExposure));
+    farCol = mix(farCol, mix(vec3(lum), uFogColor, 0.45), farK * 0.75);
+  }
+  vec3 col = farCol * T + hazeCol * (1.0 - T);
   if (uVolStrength > 0.0) {
     // Shadowed sunlight scattered by the humid air (light shafts), lightly blurred.
     float v = texture2D(uVolTex, uv).r * 0.4;
@@ -93,6 +102,7 @@ export class FogEffect extends Effect {
         ['uSunDirect', new THREE.Uniform(1)],
         ['uVolG', new THREE.Uniform(0.6)],
         ['uVolIso', new THREE.Uniform(0.2)],
+        ['uFarHaze', new THREE.Uniform(0)],
       ]),
     });
   }

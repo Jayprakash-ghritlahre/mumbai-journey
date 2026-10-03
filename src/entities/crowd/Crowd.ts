@@ -7,6 +7,7 @@ import { POSE, child, jogger, makeLook, makeLookOf, man, policeLook, woman, youn
 import { CAR } from '../train/Livery';
 import { TrainSystem, type TrainView } from '../train/TrainSystem';
 import { CONCOURSE, EDGE, PLATFORMS, TRACKS, Y } from '../../world/churchgate/Layout';
+import { WEATHER } from '../../gfx/Weather';
 
 type State = 'walk' | 'idle' | 'sit' | 'gone';
 
@@ -165,7 +166,7 @@ export class Crowd {
     this.seats = seats;
     this.seatUsed = seats.map(() => false);
     const mat = createCrowdMaterial(av);
-    const depth = createCrowdDepthMaterial();
+    const depth = createCrowdDepthMaterial(av);
     const variants: Variant[] = ['man', 'woman', 'saree', 'youth', 'girl'];
     variants.forEach((v) => {
       const caps = MAX[v];
@@ -273,6 +274,112 @@ export class Crowd {
   // ---- Street life (Churchgate → Marine Drive) --------------------------------------------------
   private streetCfg: StreetConfig | null = null;
   private streetWalkers = 0;
+  /** People who left their seat on the sea wall for the rain, and where they sat. */
+  private rainMoved = new Map<Agent, { x: number; z: number; y: number; heading: number; pose: number }>();
+  private monsoon = false;
+  private heavyShift = false;
+
+  /**
+   * The monsoon (MONSOON.md §4): fewer people sit out on the open sea wall. Many get down and stand
+   * back on the promenade watching the waves; in a heavy burst most of the rest follow (and stay
+   * standing after). Clear weather puts everyone back on the wall.
+   */
+  setWeather(monsoon: boolean, instant = false): void {
+    if (monsoon === this.monsoon) return;
+    this.monsoon = monsoon;
+    if (monsoon) this.rainShift(0.62, instant);
+    else {
+      for (const [a, home] of this.rainMoved) {
+        if (a.state === 'gone') continue;
+        // Those walking off were counted as street walkers.
+        if (a.onArrive === 'despawn') this.streetWalkers--;
+        Object.assign(a, home);
+        a.face = home.heading;
+        a.onArrive = 'wait';
+        a.state = 'sit';
+        a.path = [];
+        a.pi = 0;
+        a.speed = 0;
+      }
+      this.rainMoved.clear();
+    }
+  }
+
+  private rainShift(share: number, instant: boolean): void {
+    const cfg = this.streetCfg;
+    if (!cfg) return;
+    const h = (n: number, k: number) => Math.abs((Math.sin(n * 12.9898 + k * 78.233) * 43758.5453) % 1);
+    const leaving = new Map<Agent, { x: number; z: number }[]>();
+    for (const a of this.agents) {
+      if (!a.street || a.state !== 'sit' || this.rainMoved.has(a)) continue;
+      // Groups go together, as the first of them decides.
+      const lead = a.group ? a.group[0] : a;
+      if (h(lead.id, 1) >= share) continue;
+      this.rainMoved.set(a, { x: a.x, z: a.z, y: a.y, heading: a.heading, pose: a.pose });
+      a.pose = POSE.stand;
+      a.y = cfg.ground(a.x, a.z);
+      const what = h(lead.id, 3);
+      if (what < 0.33) {
+        // Off along the promenade or over to the road, out of it (a group on one route).
+        let route = leaving.get(lead);
+        if (!route) leaving.set(lead, (route = cfg.leave(lead.x, lead.z, this.rng)));
+        if (route.length) {
+          const fx = Math.sin(lead.heading);
+          const fz = Math.cos(lead.heading);
+          const off = THREE.MathUtils.clamp((a.x - lead.x) * fz - (a.z - lead.z) * fx, -1.4, 1.4);
+          a.path = a === lead ? route : offsetPath(route, off);
+          a.pi = 0;
+          a.state = 'walk';
+          a.onArrive = 'despawn';
+          a.face = null;
+          a.pref = this.rng.range(1.2, 1.6);
+          this.streetWalkers++;
+          continue;
+        }
+      }
+      // Back from the wall, at no set distance or spacing: most watching the waves, some turned to
+      // their friends or the road.
+      const back = 2.5 + h(lead.id, 2) * 7;
+      const sideways = (h(lead.id, 4) - 0.5) * 5;
+      // Away from the sea, whichever way they sat (some sit with their backs to it): the side where
+      // the promenade is (the sea and the road are lower).
+      let fx = Math.sin(a.heading);
+      let fz = Math.cos(a.heading);
+      const onProm = (d: number) => cfg.ground(a.x - fx * d, a.z - fz * d) > 0.1;
+      if (!onProm(2.5)) {
+        fx = -fx;
+        fz = -fz;
+      }
+      let dist = back;
+      while (dist > 2 && !onProm(dist)) dist -= 1;
+      let tx = a.x - fx * dist + fz * sideways;
+      let tz = a.z - fz * dist - fx * sideways;
+      if (cfg.ground(tx, tz) < 0.1) {
+        tx = a.x - fx * dist;
+        tz = a.z - fz * dist;
+      }
+      // Facing the sea mostly (the way away from the promenade), some turned to the road.
+      const seaward = Math.atan2(fx, fz);
+      const turn = h(lead.id, 5);
+      a.face = seaward + (turn < 0.8 ? (h(a.id, 6) - 0.5) * 1.1 : Math.PI + (h(a.id, 6) - 0.5) * 1.4);
+      if (instant) {
+        a.x = tx;
+        a.z = tz;
+        a.y = cfg.ground(tx, tz);
+        a.heading = a.face;
+        a.state = 'idle';
+        a.timer = 1e9;
+        a.onArrive = 'wait';
+        continue;
+      }
+      a.state = 'walk';
+      a.path = [{ x: tx, z: tz }];
+      a.pi = 0;
+      a.onArrive = 'wait';
+      a.pref = this.rng.range(1.1, 1.45);
+    }
+  }
+
 
   configureStreet(cfg: StreetConfig): void {
     this.streetCfg = cfg;
@@ -812,6 +919,11 @@ export class Crowd {
         }
       }
     }
+    // A heavy burst sends most of those still on the wall back off it.
+    if (this.monsoon && WEATHER.heavy > 0.6 && !this.heavyShift) {
+      this.heavyShift = true;
+      this.rainShift(0.88, false);
+    } else if (WEATHER.heavy < 0.15) this.heavyShift = false;
     for (const a of this.agents) {
       if (a.state === 'gone') continue;
       // Talking: the head and a hand move on the phase.
@@ -928,6 +1040,8 @@ export class Crowd {
       }
       // Across the road people walk briskly and keep going.
       let pref = a.pi <= a.hurryUntil ? Math.max(a.pref, 1.75) : a.pref;
+      // In the rain people walk a little quicker (heads down, for the next shelter).
+      pref *= 1 + 0.12 * WEATHER.amount + 0.08 * WEATHER.heavy;
       // Couples keep pace: whoever gets ahead eases off, whoever falls behind catches up.
       const mate = a.partner;
       if (mate && mate.state !== 'gone') {
@@ -1137,7 +1251,7 @@ export class Crowd {
           h = r > 0.5 ? 0 : Math.PI;
           pose = r2 > 0.3 ? 3 : 2;
         }
-        put(look, x, CAR.floorY - (pose === 1 ? 0 : 0), z, h, 0, 0, pose);
+        put(look, x, CAR.floorY - (pose === 1 ? 0 : 0), z, h, 0, 0, pose + POSE.inside);
       }
     }
     void EDGE;

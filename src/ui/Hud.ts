@@ -1,5 +1,6 @@
 import type { Quality } from '../core/Engine';
 import { PRESET_LABEL, PRESET_ORDER, type TimePreset } from '../gfx/TimeOfDay';
+import { WEATHER_LABEL, WEATHER_ORDER, type WeatherPreset } from '../gfx/Weather';
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, html?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -18,6 +19,8 @@ export interface HudCallbacks {
   onAuto: () => void;
   onExplore: (where: ExploreStart) => void;
   onTime: (t: TimePreset) => void;
+  /** Clear or the Mumbai monsoon (a layer over the time of day). */
+  onWeather: (w: WeatherPreset) => void;
   onQuality: (q: Quality) => void;
   onSound: (on: boolean) => void;
   onSkip: () => void;
@@ -46,11 +49,12 @@ export class Hud {
   private hintsHtml = '';
   private toastTimer = 0;
   private timeButtons = new Map<TimePreset, HTMLButtonElement>();
+  private weatherButtons = new Map<WeatherPreset, HTMLButtonElement>();
   private qualityButtons = new Map<Quality, HTMLButtonElement>();
   private soundBtn!: HTMLButtonElement;
   soundOn = true;
 
-  constructor(container: HTMLElement, cb: HudCallbacks, initial: { time: TimePreset; quality: Quality }) {
+  constructor(container: HTMLElement, cb: HudCallbacks, initial: { time: TimePreset; quality: Quality; weather: WeatherPreset }) {
     this.root = el('div', 'ui-layer');
     container.appendChild(this.root);
 
@@ -71,7 +75,7 @@ export class Hud {
     this.hints = el(
       'div',
       'hints',
-      '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk &nbsp; <kbd>Shift</kbd> run &nbsp; <kbd>Mouse</kbd> look &nbsp; <kbd>T</kbd> time of day &nbsp; <kbd>F</kbd> fly &nbsp; <kbd>Esc</kbd> menu &nbsp; <kbd>`</kbd> stats',
+      '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk &nbsp; <kbd>Shift</kbd> run &nbsp; <kbd>Mouse</kbd> look &nbsp; <kbd>T</kbd> time of day &nbsp; <kbd>R</kbd> weather &nbsp; <kbd>F</kbd> fly &nbsp; <kbd>Esc</kbd> menu &nbsp; <kbd>`</kbd> stats',
     );
     this.clickToLook = el('div', 'click-to-look', 'Click to look around');
     this.stats = el('div', 'stats');
@@ -128,6 +132,17 @@ export class Hud {
     }
     timeWrap.append(timeSeg);
 
+    const weatherWrap = el('div');
+    weatherWrap.append(el('div', 'opt-label', 'Weather'));
+    const weatherSeg = el('div', 'seg');
+    for (const k of WEATHER_ORDER) {
+      const b = el('button', k === initial.weather ? 'on' : '', WEATHER_LABEL[k]);
+      b.addEventListener('click', () => cb.onWeather(k));
+      this.weatherButtons.set(k, b);
+      weatherSeg.append(b);
+    }
+    weatherWrap.append(weatherSeg);
+
     const optRow = el('div', 'btn-row');
     const qWrap = el('div');
     qWrap.append(el('div', 'opt-label', 'Quality'));
@@ -152,7 +167,7 @@ export class Hud {
     sSeg.append(this.soundBtn);
     sWrap.append(sSeg);
     optRow.append(qWrap, sWrap);
-    actions.append(row, timeWrap, optRow);
+    actions.append(row, timeWrap, weatherWrap, optRow);
     this.menu.append(left, actions);
     this.root.append(this.menu);
 
@@ -214,6 +229,10 @@ export class Hud {
 
   setTimeSelected(t: TimePreset): void {
     this.timeButtons.forEach((b, k) => b.classList.toggle('on', k === t));
+  }
+
+  setWeatherSelected(w: WeatherPreset): void {
+    this.weatherButtons.forEach((b, k) => b.classList.toggle('on', k === w));
   }
 
   setQualitySelected(q: Quality): void {
@@ -292,9 +311,9 @@ export class Hud {
     if (!this.hintsHtml) this.hintsHtml = this.hints.innerHTML;
     this.hints.innerHTML =
       kind === 'ride'
-        ? '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &nbsp; <kbd>Mouse</kbd> look &nbsp; <kbd>E</kbd> sit / stand &nbsp; <kbd>N</kbd> skip ahead &nbsp; <kbd>Esc</kbd> menu'
+        ? '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move &nbsp; <kbd>Mouse</kbd> look &nbsp; <kbd>E</kbd> sit / stand &nbsp; <kbd>N</kbd> skip ahead &nbsp; <kbd>R</kbd> weather &nbsp; <kbd>Esc</kbd> menu'
         : kind === 'auto'
-          ? '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk &nbsp; <kbd>Mouse</kbd> look &nbsp; <kbd>E</kbd> wave / get in / pay &nbsp; <kbd>N</kbd> skip ahead &nbsp; <kbd>T</kbd> time of day &nbsp; <kbd>Esc</kbd> menu'
+          ? '<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk &nbsp; <kbd>Mouse</kbd> look &nbsp; <kbd>E</kbd> wave / get in / pay &nbsp; <kbd>N</kbd> skip ahead &nbsp; <kbd>T</kbd> time of day &nbsp; <kbd>R</kbd> weather &nbsp; <kbd>Esc</kbd> menu'
           : this.hintsHtml;
   }
 

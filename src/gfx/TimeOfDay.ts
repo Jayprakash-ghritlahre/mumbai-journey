@@ -53,6 +53,9 @@ export interface LightingState {
   cloudLit: THREE.Color;
   cloudShade: THREE.Color;
   night: number; // 0 day .. 1 full night
+  /** Weather (Weather.ts): how overcast the monsoon sky is (0 clear … 1), and the rain falling now. */
+  overcast: number;
+  rain: number;
   grade: { lift: THREE.Color; gain: THREE.Color; saturation: number; contrast: number };
 }
 
@@ -123,10 +126,14 @@ export function computeLighting(hour: number, cloudCover = 0.32, out?: LightingS
     cloudLit: new THREE.Color(),
     cloudShade: new THREE.Color(),
     night: 0,
+    overcast: 0,
+    rain: 0,
     grade: { lift: new THREE.Color(), gain: new THREE.Color(), saturation: 1, contrast: 1 },
   };
   s.hour = hour;
   s.cloudCover = cloudCover;
+  s.overcast = 0;
+  s.rain = 0;
   const { year, month, day } = JOURNEY_DATE;
   const sun = solarPosition(istToUtc(year, month, day, hour));
   s.sunElevation = sun.elevation;
@@ -169,5 +176,60 @@ export function computeLighting(hour: number, cloudCover = 0.32, out?: LightingS
     s.sunColor.setRGB(0.55, 0.65, 0.9);
     s.sunIntensity = 0.06;
   }
+  return s;
+}
+
+const tmp = new THREE.Color();
+const grey = (c: THREE.Color) => c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
+
+/**
+ * The monsoon over whatever the time of day is (`m`: how far it has set in, `rain`: the fall now).
+ * A low, unbroken deck of rain cloud: the sun goes (a brighter patch where it is), the sky turns a
+ * pale grey by day, slate at dusk and a dull orange-grey at night (the city's sodium light on the
+ * cloud base); the rain haze closes the distance in; colours go quieter; the lamps and lit shop
+ * signs come on early under the dark sky.
+ */
+export function applyWeather(s: LightingState, m: number, rain: number): LightingState {
+  if (m <= 0.001) return s;
+  s.overcast = m;
+  s.rain = rain;
+  const el = s.sunElevation;
+  // How much daylight comes through the cloud: full by day, less with the sun low, none at night.
+  const day = smoothstep(-7, 10, el);
+  const level = day * (0.5 + 0.5 * smoothstep(4, 40, el)) * (1 - 0.22 * rain);
+  const dusk = day * (1 - smoothstep(4, 22, el));
+  const set = (c: THREE.Color, dayRGB: [number, number, number], nightRGB: [number, number, number], keep: number) => {
+    tmp.setRGB(nightRGB[0], nightRGB[1], nightRGB[2]).lerp(new THREE.Color(dayRGB[0] * level, dayRGB[1] * level, dayRGB[2] * level), day);
+    // A little of the clear sky's own colour shows through (warmth low in the west at dusk).
+    tmp.lerp(c.clone().multiplyScalar(grey(tmp) / Math.max(grey(c), 1e-4)), keep);
+    c.lerp(tmp, m);
+  };
+  // Day: pale grey. Night: charcoal and blue-grey storm cloud, the horizon a little lighter (the
+  // city's glow under the cloud base is added by the sky). Dusk keeps a little warmth low down only.
+  set(s.zenith, [0.27, 0.29, 0.32], [0.008, 0.0095, 0.0135], 0.06);
+  set(s.horizon, [0.33, 0.345, 0.36], [0.036, 0.038, 0.046], 0.1 + 0.22 * dusk);
+  set(s.horizonAnti, [0.3, 0.315, 0.33], [0.026, 0.029, 0.037], 0.04);
+  set(s.fogColor, [0.29, 0.305, 0.315], [0.02, 0.022, 0.028], 0.05 + 0.08 * dusk);
+  set(s.cloudLit, [0.36, 0.375, 0.39], [0.038, 0.041, 0.05], 0.06 + 0.14 * dusk);
+  set(s.cloudShade, [0.13, 0.14, 0.152], [0.008, 0.009, 0.013], 0.03);
+  s.ground.copy(s.horizonAnti).lerp(s.horizon, 0.3).multiplyScalar(0.3 + 0.25 * (1 - s.lamps));
+  s.cloudCover += (1 - s.cloudCover) * m;
+  // The sun: a dim, diffuse key through the cloud (soft shading, faint shadows).
+  s.sunIntensity *= 1 - 0.86 * m;
+  s.sunColor.lerp(tmp.setRGB(0.85, 0.88, 0.92), 0.6 * m * day);
+  s.hazeGlow *= 1 - 0.85 * m;
+  // Rain haze: the far shore and the towers fade into grey.
+  // (The streets close by stay clear; the far-off city greys out in the rain: FogEffect's far haze.)
+  s.fogDensity += (0.00035 + 0.0006 * rain - s.fogDensity) * m;
+  s.envIntensity *= 1 + 0.2 * m * day;
+  // Lamps and lit signs on early under the dark sky.
+  s.lamps += (Math.max(s.lamps, 0.3 + 0.7 * (1 - smoothstep(-2, 16, el))) - s.lamps) * m;
+  // The eye opens up to the gloom (it stays darker than a clear day).
+  s.exposure *= 1 + 0.18 * m * day;
+  const g = s.grade;
+  g.saturation *= 1 - 0.2 * m;
+  g.contrast += (1.02 - g.contrast) * m;
+  g.lift.lerp(tmp.setRGB(0.004, 0.008, 0.011), m);
+  g.gain.lerp(tmp.setRGB(0.97, 1.0, 1.03), m);
   return s;
 }

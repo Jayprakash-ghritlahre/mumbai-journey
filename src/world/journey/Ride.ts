@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RNG } from '../../core/Random';
 import { buildHeroCar, cabinLit, type HeroCar } from '../../entities/train/HeroCar';
 import { Riders } from '../../entities/crowd/Riders';
-import { makeLook, type Look } from '../../entities/crowd/Looks';
+import { POSE, makeLook, type Look } from '../../entities/crowd/Looks';
 import { CAR } from '../../entities/train/Livery';
 import { A_BRAKE, ARRIVAL_SECONDS, FAR, V_IN, type FreeTrain } from '../../entities/train/TrainSystem';
 import { fmtTime } from '../../entities/train/Timetable';
@@ -297,7 +297,7 @@ export class Ride {
     this.inside.matrixAutoUpdate = false;
     this.inside.visible = false;
     world.journey.group.add(this.inside);
-    this.riders = new Riders(world.av, 90, { patch: (m) => cabinLit(m, this.hero.cabin) });
+    this.riders = new Riders(world.av, 90, { patch: (m) => cabinLit(m, this.hero.cabin), indoor: true });
     this.inside.add(this.riders.group);
     this.others = new Riders(world.av, 700, { lod: 1, shadows: false });
     this.othersAnchor.add(this.others.group);
@@ -810,7 +810,7 @@ export class Ride {
           pose = 1;
         }
         tmp.set(x, CAR.floorY, z).applyMatrix4(cm);
-        O.put(look, tmp.x - anchor.x, CAR.floorY, tmp.z - anchor.z, yaw + heading, 0, 0, pose);
+        O.put(look, tmp.x - anchor.x, CAR.floorY, tmp.z - anchor.z, yaw + heading, 0, 0, pose + POSE.inside);
       }
     };
     if (this.rake.visible)

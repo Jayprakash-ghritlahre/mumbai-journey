@@ -21,8 +21,15 @@ import { Y } from '../world/churchgate/Layout';
 import { TOP as MIRA_TOP } from '../world/miraroad/MiraCtx';
 import { AutoRide } from '../world/journey/AutoRide';
 import { AutoAudio } from '../audio/AutoAudio';
+import { WEATHER, WEATHER_LABEL, WEATHER_ORDER, Weather, type WeatherPreset } from '../gfx/Weather';
+import { Rain } from '../gfx/Rain';
+import { RainAudio } from '../audio/RainAudio';
 
 type Mode = 'loading' | 'menu' | 'explore' | 'cinematic' | 'ride' | 'auto';
+
+/** The coach being ridden and the auto's cabin, kept dry in the rain (frame-local boxes). */
+const DRY_CAR = { centre: new THREE.Vector3(0, (CAR.floorY + CAR.roofY) / 2, 0), half: new THREE.Vector3(CAR.halfW - 0.03, (CAR.roofY - CAR.floorY) / 2 + 0.08, CAR.length / 2 - 0.05) };
+const DRY_AUTO = { centre: new THREE.Vector3(0, 1.075, -0.05), half: new THREE.Vector3(0.64, 0.625, 1.0) };
 
 /** Hours between Mira Road and the chosen time (the ride's clock, ⚠ an estimate of the journey). */
 const JOURNEY_LEAD = 1.05;
@@ -30,6 +37,7 @@ const JOURNEY_LEAD = 1.05;
 interface Params {
   quality: Quality;
   time: TimePreset | number;
+  weather: WeatherPreset;
   mode: Mode | null;
   cam: number[] | null;
   hud: boolean;
@@ -44,6 +52,7 @@ function readParams(): Params {
   return {
     quality: (q.get('q') as Quality) ?? 'medium',
     time: t,
+    weather: q.get('weather') === 'monsoon' ? 'monsoon' : 'clear',
     mode: (q.get('mode') as Mode) ?? null,
     cam: q.get('cam')?.split(',').map(Number) ?? null,
     hud: q.get('hud') !== '0',
@@ -95,10 +104,17 @@ export class App {
   /** Game hour the ride's train is due at PF 4 (shown on the boards). */
   private rideDue = 0;
   private cgBounds = { minX: 0, maxX: 0, minZ: 0, maxZ: 0 };
+  /** The weather over the time of day (Weather.ts, MONSOON.md), and its rain. */
+  private readonly weather = new Weather();
+  private rain: Rain | null = null;
+  private rainAudio: RainAudio | null = null;
+  /** Vehicles near the listener (re-sampled a few times a second for the rain's tyre hiss). */
+  private rainVehicles: { pos: THREE.Vector3; speed: number }[] = [];
 
   constructor(container: HTMLElement) {
     const p = this.params;
     this.engine = new Engine(container, p.quality);
+    this.weather.set(p.weather, true);
     this.input = new Input(this.engine.renderer.domElement);
     this.preset = typeof p.time === 'number' ? 'golden' : p.time;
     this.hour = typeof p.time === 'number' ? p.time : PRESET_HOURS[p.time];
@@ -122,8 +138,10 @@ export class App {
           this.startAuto();
         },
         onTime: (t) => this.setPreset(t),
+        onWeather: (w) => this.setWeather(w),
         onQuality: (q) => {
           this.engine.setQuality(q);
+          this.rain?.setQuality(q);
           this.hud.setQualitySelected(q);
         },
         onSound: (on) => {
@@ -133,7 +151,7 @@ export class App {
         onSkip: () => this.endCinematic(),
         onBackToMenu: () => this.setMode('menu'),
       },
-      { time: this.preset, quality: p.quality },
+      { time: this.preset, quality: p.quality, weather: p.weather },
     );
     if (!p.hud) this.hud.root.style.display = 'none';
     this.hud.showStats(p.stats);
@@ -163,6 +181,9 @@ export class App {
     await this.world.build(progress, this.hour);
     this.engine.scene.add(this.world.root);
     this.engine.scene.add(this.world.journey.group);
+    this.rain = new Rain(this.world.av, this.params.quality);
+    this.engine.scene.add(this.rain.group);
+    this.world.crowd.setWeather(this.params.weather === 'monsoon', true);
     this.ride = new Ride(this.world, this.world.railway);
     this.rideControls = new RideControls(this.input);
     this.rideControls.onHint = (t) => this.hud.hint(t);
@@ -336,6 +357,20 @@ export class App {
     this.hud.setTimeSelected(t);
   }
 
+  /** Clear or the Mumbai monsoon, over whatever the time of day is (it sets in over a few seconds). */
+  private setWeather(w: WeatherPreset, instant = false): void {
+    this.weather.set(w, instant);
+    this.hud.setWeatherSelected(w);
+    this.world?.crowd?.setWeather(w === 'monsoon');
+  }
+
+  /** R: the other weather (explore, the auto, the ride). */
+  private toggleWeather(): void {
+    const w = WEATHER_ORDER[(WEATHER_ORDER.indexOf(this.weather.preset) + 1) % WEATHER_ORDER.length];
+    this.setWeather(w);
+    this.hud.toast(WEATHER_LABEL[w]);
+  }
+
   /** Audio needs a user gesture; create the soundscape on the first Start/Explore click. */
   private ensureSound(): void {
     if (this.sound) {
@@ -378,10 +413,23 @@ export class App {
       window.setTimeout(() => this.hud.hideSub(), 9000);
     };
     // Announcements are spoken by the browser (Google's voices in Chrome): say so when it fails.
+    // Silent while the tab is hidden (the page stops drawing, and the ambience would hold at whatever
+    // it was as a steady hiss); back on when you return. Mute stays the menu's Sound setting.
+    document.addEventListener('visibilitychange', () => {
+      const a = this.sound?.audio;
+      if (!a) return;
+      if (document.hidden) {
+        a.cancelSpeech();
+        void a.ctx.suspend();
+      } else void a.ctx.resume();
+    });
     this.sound.audio.onSpeechError = (why) => this.hud.toast(`Announcement voice failed (${why}) · captions only · restart the browser to restore it`, 8000);
     this.rideAudio = new RideAudio(this.sound.audio, w.railway.dMiraRoad);
     this.rideAudio.onSubtitle = this.sound.onSubtitle;
     this.autoAudio = new AutoAudio(this.sound.audio);
+    this.rainAudio = new RainAudio(this.sound.audio);
+    // The big waves at Marine Drive boom against the wall.
+    this.world.route.sea.onImpact = (pos, strength) => this.sound?.seaCrash(pos, strength);
     void this.sound.start().then(() => this.sound?.setEnabled(this.soundOn));
   }
 
@@ -722,6 +770,7 @@ export class App {
       this.updateRide(dt);
       if (this.input.hit('Escape')) this.setMode('menu');
       if (this.input.hit('Backquote')) this.hud.showStats(!this.hud.statsVisible);
+      if (this.input.hit('KeyR')) this.toggleWeather();
     } else if (this.mode === 'auto' && !this.fixedCam) {
       // On foot until you are in the auto; then the ride has the camera.
       if (!this.autoRide.ownsCamera) this.explore.update(dt);
@@ -733,6 +782,7 @@ export class App {
         this.setPreset(PRESET_ORDER[(PRESET_ORDER.indexOf(this.preset) + 1) % PRESET_ORDER.length]);
         this.hud.toast(PRESET_LABEL[this.preset]);
       }
+      if (this.input.hit('KeyR')) this.toggleWeather();
     } else if (this.mode === 'explore' && !this.fixedCam) {
       this.explore.update(dt);
       if (this.miraWalk) this.updateMiraWalk(dt);
@@ -740,6 +790,7 @@ export class App {
       if (this.autoRide.phase === 'away') this.autoRide.update(dt, this.engine.camera, this.explore);
       if (this.input.hit('Escape')) this.setMode('menu');
       if (this.input.hit('Backquote')) this.hud.showStats(!this.hud.statsVisible);
+      if (this.input.hit('KeyR')) this.toggleWeather();
       if (this.input.hit('KeyT')) {
         this.setPreset(PRESET_ORDER[(PRESET_ORDER.indexOf(this.preset) + 1) % PRESET_ORDER.length]);
         this.hud.toast(PRESET_LABEL[this.preset]);
@@ -778,9 +829,19 @@ export class App {
         this.litAt = nowMs;
       }
     }
+    // The weather: the rain's ebb and flow, the light over the time of day.
+    this.weather.update(this.params.freeze ? 0 : dt);
+    this.engine.setWeather(WEATHER.amount, WEATHER.rain);
     const light = this.engine.lighting;
     this.world.update(dt, this.time, light, this.hour, this.engine.camera);
     this.ride.update(dt, this.time, light.lamps, this.engine.camera);
+    // Dry inside: the coach being ridden and the auto's cabin (no rain falls there, nothing is wet).
+    if (this.ride.active) this.weather.setDry(0, this.ride.frame, DRY_CAR.centre, DRY_CAR.half);
+    else this.weather.setDry(0, null);
+    const cabin = this.autoRide.cabin();
+    if (cabin) this.weather.setDry(1, cabin, DRY_AUTO.centre, DRY_AUTO.half);
+    else this.weather.setDry(1, null);
+    this.rain?.update(dt, this.time, this.engine.camera, light, this.engine.renderer.domElement.height);
     this.sound?.update(dt, this.engine.camera, this.hour);
     if (this.sound && this.sound.audio.ctx.state === 'running') {
       this.rideAudio?.update(dt, this.engine.camera, this.ride);
@@ -822,6 +883,33 @@ export class App {
     const h = Math.floor(this.hour);
     const m = Math.floor((this.hour - h) * 60);
     this.hud.setClock(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')} IST`);
+    // The rain's sound for where you are: under a roof, in the coach or the auto, by the sea.
+    if (this.sound && this.rainAudio && this.sound.audio.ctx.state === 'running') {
+      if (this.frames % 6 === 0) this.rainVehicles = this.sound.vehiclesNear(cp, 30);
+      this.sound.seaRough = this.world.far ? 0 : WEATHER.sea;
+      let sea = 0;
+      if (!this.world.far) {
+        const q = MD.axis.project(cp.x, cp.z);
+        sea = 1 - THREE.MathUtils.smoothstep(Math.abs(q.o - MD.wallOuter), 8, 140);
+      }
+      this.rainAudio.update(
+        dt,
+        {
+          rain: WEATHER.rain,
+          amount: WEATHER.amount,
+          wind: WEATHER.windSpeed,
+          roof: inCar || inAuto ? 0 : interior,
+          inTrain: inCar,
+          inAuto,
+          speed: inCar ? Math.abs(this.ride.state.v) : inAuto ? this.autoRide.v : 0,
+          sea,
+          heavy: WEATHER.heavy,
+          vehicles: this.rainVehicles,
+          wipes: this.autoRide.wipes,
+        },
+        cp,
+      );
+    }
   }
 
   private testApi() {
@@ -846,6 +934,9 @@ export class App {
         this.engine.setHour(h);
       },
       setQuality: (q: Quality) => this.engine.setQuality(q),
+      /** Clear or monsoon; instant skips the few seconds it takes to set in. */
+      setWeather: (w: WeatherPreset, instant = true) => this.setWeather(w, instant),
+      weather: () => ({ ...WEATHER, wind: WEATHER.wind.toArray() }),
       cam: () => this.engine.camera.position.toArray().map((v) => +v.toFixed(2)),
       profile: () => {
         const out: Record<string, number> = {};

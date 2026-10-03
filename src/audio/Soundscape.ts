@@ -44,6 +44,8 @@ export class Soundscape {
   private tStreet = 0;
   onSubtitle: (en: string, deva: string) => void = () => {};
   speech = true;
+  /** The monsoon sea at Marine Drive (0 calm … 1), set by the app from the weather. */
+  seaRough = 0;
 
   constructor(private readonly world: SoundWorld) {
     this.audio = new AudioEngine();
@@ -61,6 +63,16 @@ export class Soundscape {
 
   setEnabled(on: boolean): void {
     this.audio.setEnabled(on);
+  }
+
+  /** Vehicles near a point (the rain's tyre hiss uses them). */
+  vehiclesNear(p: THREE.Vector3, r: number): { pos: THREE.Vector3; speed: number }[] {
+    return this.world.traffic.nearby(p, r);
+  }
+
+  /** A big wave hitting the sea wall (the monsoon). */
+  seaCrash(pos: THREE.Vector3, strength: number): void {
+    if (this.audio.ctx.state === 'running') this.seaBed.crash(pos, strength, this.audio.listener);
   }
 
   /** How well Churchgate's PA carries to the listener (0 beyond PA_RANGE of every speaker). */
@@ -130,7 +142,7 @@ export class Soundscape {
     this.street.update((0.03 + 0.4 * this.streetK) * (1 - 0.6 * interior), t);
     if (this.world.sea) {
       const sea = this.world.sea(cam);
-      this.seaBed.update(dt, sea.point, sea.d);
+      this.seaBed.update(dt, sea.point, sea.d, this.seaRough);
     }
 
     // Voices around the listener.

@@ -22,11 +22,12 @@ export class Riders {
   private readonly one = new THREE.Vector3(1, 1, 1);
   private readonly up = new THREE.Vector3(0, 1, 0);
 
-  constructor(av: AmbientVolume, cap: number, opts: { lod?: 0 | 1; shadows?: boolean; patch?: (m: THREE.Material) => void } = {}) {
+  /** indoor: inside a coach or an auto (no umbrellas up; raincoats stay on). */
+  constructor(av: AmbientVolume, cap: number, opts: { lod?: 0 | 1; shadows?: boolean; patch?: (m: THREE.Material) => void; indoor?: boolean } = {}) {
     this.group.name = 'riders';
-    this.material = createCrowdMaterial(av);
+    this.material = createCrowdMaterial(av, { indoor: opts.indoor });
     opts.patch?.(this.material);
-    const depth = createCrowdDepthMaterial();
+    const depth = createCrowdDepthMaterial(av, { indoor: opts.indoor });
     for (const v of VARIANTS) {
       const geo = buildHuman(v, opts.lod ?? 0);
       const attrs: Record<string, THREE.InstancedBufferAttribute> = {};
