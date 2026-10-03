@@ -24,6 +24,8 @@ uniform float uCloudCover;
 uniform float uTime;
 uniform float uNight;
 uniform float uEnvMode;
+uniform float uOvercast;
+uniform float uRain;
 varying vec3 vDir;
 
 float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -58,6 +60,8 @@ void main() {
   float g2 = pow(max(mu, 0.0), 90.0);
   float g3 = pow(max(mu, 0.0), 900.0);
   vec3 glow = uSunColor * (g1 * 0.2 + g2 * 0.55 + g3 * 1.6) * uHazeGlow * (0.3 + 0.7 * exp(-th * 2.5));
+  // Behind the monsoon cloud only a brighter patch shows where the sun is.
+  glow = mix(glow, uSunColor * (g1 * 0.5 + pow(max(mu, 0.0), 3.0) * 0.12) * 0.3 * uCloudLit, uOvercast);
   // A low sun: a warm veil round it and along the horizon beneath it, added on top, so the sky
   // between the gold and the blue stays luminous instead of averaging to grey.
   float veil = pow(max(mu, 0.0), 5.0) * pow(1.0 - th, 6.0);
@@ -68,25 +72,42 @@ void main() {
 
   if (h > 0.005) {
     vec2 uv = d.xz / (h + 0.05);
-    uv = uv * 0.8 + vec2(uTime * 0.0035, uTime * 0.0012);
+    uv = uv * 0.8 + vec2(uTime * 0.0035, uTime * 0.0012) * (1.0 + 5.0 * uOvercast);
     float n = fbm(uv * 0.55);
     float cov = smoothstep(1.0 - uCloudCover - 0.02, 1.0 - uCloudCover + 0.32, n);
     cov *= smoothstep(0.015, 0.16, h);
     float thick = smoothstep(0.55, 1.05, n);
     vec3 cc = mix(uCloudLit, uCloudShade, thick * 0.7);
-    cc += uSunColor * pow(max(mu, 0.0), 10.0) * 1.1 * (1.0 - thick) * (1.0 - uNight);
+    cc += uSunColor * pow(max(mu, 0.0), 10.0) * 1.1 * (1.0 - thick) * (1.0 - uNight) * (1.0 - uOvercast);
     cc = mix(cc, hor * 1.05, exp(-h * 9.0) * 0.55);
-    sky = mix(sky, cc, cov * 0.88);
+    sky = mix(sky, cc, cov * 0.88 * (1.0 - uOvercast));
+    if (uOvercast > 0.0) {
+      // The monsoon deck: an unbroken base of nimbostratus, darker masses of rain cloud racing
+      // under it on the wind, the lower sky lost in the rain haze.
+      vec2 lo = d.xz / (h + 0.12) * 0.5 + vec2(uTime * 0.03, uTime * 0.011);
+      float big = fbm(lo * 0.35);
+      float scud = fbm(lo * 1.3 + vec2(uTime * 0.02, 0.0));
+      float dark = smoothstep(0.35, 0.8, big) * 0.75 + smoothstep(0.5, 0.85, scud) * 0.35;
+      vec3 deck = mix(uCloudLit, uCloudShade, clamp(dark, 0.0, 1.0));
+      // A paler, brighter band where the light comes through under the deck.
+      deck += uCloudLit * 0.25 * pow(1.0 - th, 3.0);
+      deck += uSunColor * pow(max(mu, 0.0), 4.0) * 0.18 * uCloudLit * (1.0 - dark * 0.6);
+      deck = mix(deck, hor, exp(-h * 7.0) * (0.55 + 0.3 * uRain));
+      // After dark the city's sodium and LED light glows on the cloud base low over the land.
+      deck += vec3(0.03, 0.019, 0.01) * exp(-h * 6.0) * uNight * (0.6 + 0.4 * smoothstep(0.3, 0.7, scud));
+      sky = mix(sky, deck, uOvercast);
+    }
   }
+  if (h <= 0.005 && uOvercast > 0.0) sky = mix(sky, hor, uOvercast * 0.6);
 
   if (uEnvMode < 0.5) {
     float disk = smoothstep(0.99986, 0.99993, mu);
-    sky += uSunColor * disk * 26.0 * uSunIntensity * smoothstep(-0.02, 0.01, h);
+    sky += uSunColor * disk * 26.0 * uSunIntensity * smoothstep(-0.02, 0.01, h) * (1.0 - uOvercast);
     // Faint stars through the city glow.
     if (uNight > 0.5 && h > 0.15) {
       vec2 sp = floor(d.xz / (h + 0.3) * 420.0);
       float st = step(0.9975, hash(sp));
-      sky += vec3(0.6, 0.65, 0.8) * st * (uNight - 0.5) * 0.15 * smoothstep(0.15, 0.5, h);
+      sky += vec3(0.6, 0.65, 0.8) * st * (uNight - 0.5) * 0.15 * smoothstep(0.15, 0.5, h) * (1.0 - uOvercast);
     }
   }
   gl_FragColor = vec4(sky, 1.0);
@@ -118,6 +139,8 @@ export class SkyDome {
         uTime: { value: 0 },
         uNight: { value: 0 },
         uEnvMode: { value: 0 },
+        uOvercast: { value: 0 },
+        uRain: { value: 0 },
       },
       side: THREE.BackSide,
       depthWrite: false,
@@ -153,6 +176,8 @@ export class SkyDome {
       u.uHazeGlow.value = s.hazeGlow;
       u.uCloudCover.value = s.cloudCover;
       u.uNight.value = s.night;
+      u.uOvercast.value = s.overcast;
+      u.uRain.value = s.rain;
       u.uTime.value = time;
     }
   }

@@ -267,7 +267,7 @@ export class Churchgate {
     this.hangings.update(dt, hour);
     this.city.update(light.lamps, _time);
     this.traffic.update(dt, light.lamps, camera);
-    this.route.update(dt, _time, camera as THREE.PerspectiveCamera, light.lamps, 1);
+    this.route.update(dt, _time, camera as THREE.PerspectiveCamera, light.lamps, 1, light);
     // Zone visibility: the shed hides the route; the route is too far to see the shed's interior.
     const cp = camera.position;
     const inShed = cp.x > -24.6 && cp.x < 24.6 && cp.z < 10.5 && cp.z > -300 && cp.y < 17;

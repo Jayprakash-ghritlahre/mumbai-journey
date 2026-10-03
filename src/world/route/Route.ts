@@ -15,6 +15,9 @@ import { at, buildMarineDrive, instanceProps, propMaterials } from './MarineDriv
 import { chowkiBoards, drawChowkiBoard, policeChowki, twinArmLamp } from './Props';
 import { buildVNRoad } from './VNRoad';
 import { Ocean, ShoreField } from './Ocean';
+import { MonsoonSea } from './SeaSpray';
+import { WEATHER } from '../../gfx/Weather';
+import type { LightingState } from '../../gfx/TimeOfDay';
 import { Glows, WaterStreaks, buildFloodlights, buildSkyline, type SkylineResult } from './Skyline';
 import { SignalController, SignalVisuals, type Aspect, type SignalDef, type SignalGroup } from './Signals';
 import { NP_PHASES, buildNarimanPoint, updateNarimanNight, type NarimanResult } from './NarimanPoint';
@@ -57,6 +60,8 @@ export class Route {
   layout!: RouteLayout;
   walk!: WalkSurface;
   ocean!: Ocean;
+  /** The monsoon's rough sea: big waves and the spray at the wall (MONSOON.md §5). */
+  readonly sea = new MonsoonSea();
   signals = new SignalController();
   /** The Air India junction at Nariman Point (groups prefixed NP_). */
   npSignals = new SignalController(NP_PHASES);
@@ -127,6 +132,7 @@ export class Route {
     this.ocean = new Ocean(tf, shore);
     mats.add('ocean', this.ocean.material);
     this.group.add(this.ocean.mesh);
+    this.group.add(this.sea.mesh);
 
     const md = buildMarineDrive(this.layout, tf, mats, atlas, col, av, this.walk);
     this.group.add(md.group);
@@ -541,19 +547,20 @@ export class Route {
   /** Hides the parts of the route that cannot be seen from inside the train shed. */
   setVisibleFromStation(inside: boolean): void {
     for (const c of this.group.children) {
-      if (['marine-drive', 'ocean', 'skyline', 'vn-road', 'trees', 'signals', 'np-signals', 'nariman-point'].includes(c.name)) c.visible = !inside;
+      if (['marine-drive', 'ocean', 'sea-spray', 'skyline', 'vn-road', 'trees', 'signals', 'np-signals', 'nariman-point'].includes(c.name)) c.visible = !inside;
     }
     this.necklace.points.visible = !inside && this.necklace.points.visible;
     this.streaks.mesh.visible = !inside && this.streaks.mesh.visible;
   }
 
-  update(dt: number, time: number, camera: THREE.PerspectiveCamera, lamps: number, pixelRatio: number): void {
+  update(dt: number, time: number, camera: THREE.PerspectiveCamera, lamps: number, pixelRatio: number, light?: LightingState): void {
     this.signals.update(dt);
     this.signalVisuals.update(this.signals, lamps);
     this.npSignals.update(dt);
     this.npSignalVisuals.update(this.npSignals, lamps);
     updateNarimanNight(lamps);
-    this.ocean.update(time, camera, lamps);
+    if (light) this.sea.update(dt, time, camera, light);
+    this.ocean.update(time, camera, lamps, WEATHER.sea, this.sea.surges);
     this.skyline.update(time, lamps);
     const glow = THREE.MathUtils.smoothstep(lamps, 0.35, 1);
     this.necklace.update(glow * 2.2, pixelRatio);

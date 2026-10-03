@@ -21,6 +21,8 @@ export const PART = {
   skirt: 10,
   pack: 11,
   bag: 12,
+  /** An open umbrella held up in the right hand (moves with the upper body). */
+  umbrella: 13,
 } as const;
 
 export const REGION = {
@@ -62,6 +64,10 @@ export const REGION = {
   earrings: 26,
   hairBun: 27,
   hairBraid: 28,
+  /** Monsoon gear, worn per person in the rain (CrowdMaterial): the umbrella's canopy, a hooded raincoat, the umbrella's shaft. */
+  umbrella: 29,
+  raincoat: 30,
+  umbrellaShaft: 31,
 } as const;
 
 /** Joint pivots (metres) shared with the shader. */
@@ -171,6 +177,95 @@ function sphere(r: number, x: number, y: number, z: number, sx = 1, sy = 1, sz =
 }
 
 
+/** A round rod from a to b. */
+function rod(a: THREE.Vector3, b: THREE.Vector3, r: number, seg: number): THREE.BufferGeometry {
+  const d = b.clone().sub(a);
+  const g = new THREE.CylinderGeometry(r, r, d.length(), seg, 1, false);
+  g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize()));
+  return g.translate((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
+}
+
+/** The same surface seen from both sides (the inner one a hair inside, wound the other way). */
+function bothSides(g: THREE.BufferGeometry, inset: THREE.Vector3): THREE.BufferGeometry {
+  const inner = g.clone();
+  inner.translate(inset.x, inset.y, inset.z);
+  const idx = inner.index!.array as ArrayLike<number>;
+  const flipped: number[] = [];
+  for (let i = 0; i < idx.length; i += 3) flipped.push(idx[i], idx[i + 2], idx[i + 1]);
+  inner.setIndex(flipped);
+  inner.computeVertexNormals();
+  return mergeGeometries([g, inner], false)!;
+}
+
+/** An umbrella's canopy: eight panels between the ribs, a shallow dome, axis along `dir` from `apex`. */
+function canopy(hi: boolean, apex: THREE.Vector3, dir: THREE.Vector3): THREE.BufferGeometry {
+  const seg = 8;
+  const rings: [number, number][] = hi
+    ? [
+        [0, 0],
+        [0.19, -0.035],
+        [0.36, -0.1],
+        [0.5, -0.2],
+      ]
+    : [
+        [0, 0],
+        [0.3, -0.07],
+        [0.5, -0.2],
+      ];
+  const pos: number[] = [];
+  const idx: number[] = [];
+  rings.forEach(([r, y]) => {
+    for (let k = 0; k <= seg; k++) {
+      const a = (k / seg) * Math.PI * 2;
+      pos.push(Math.sin(a) * r, y, Math.cos(a) * r);
+    }
+  });
+  for (let r = 0; r < rings.length - 1; r++)
+    for (let k = 0; k < seg; k++) {
+      const a = r * (seg + 1) + k;
+      const b = a + seg + 1;
+      idx.push(a, a + 1, b, b, a + 1, b + 1);
+    }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  const both = bothSides(g, new THREE.Vector3(0, -0.006, 0));
+  both.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize()));
+  return both.translate(apex.x, apex.y, apex.z);
+}
+
+/**
+ * Monsoon gear, shown per person in the rain (CrowdMaterial decides who): an open umbrella held up
+ * in the right hand over the head, and a hooded raincoat to the knees with its sleeves. `handX` is
+ * where this build's right hand is when holding the umbrella, `shoulderX` its arms.
+ */
+function rainGear(add: Add, hi: boolean, lseg: number, shoulderX: number, handX: number): void {
+  const J = JOINT;
+  const grip = new THREE.Vector3(handX, 1.17, 0.3);
+  const apex = new THREE.Vector3(0.07, 2.03, 0.15);
+  const dir = apex.clone().sub(grip);
+  add(rod(grip, apex, 0.008, hi ? 6 : 4), PART.umbrella, REGION.umbrellaShaft);
+  add(rod(grip.clone().add(new THREE.Vector3(0, -0.1, 0)), grip.clone().add(new THREE.Vector3(0, 0.035, 0)), 0.017, hi ? 6 : 4), PART.umbrella, REGION.umbrellaShaft);
+  add(canopy(hi, apex, dir), PART.umbrella, REGION.umbrella);
+  // The raincoat: body, the skirt to the knees (it sways like a kurta's), sleeves, the hood.
+  const seg = hi ? 10 : 5;
+  const ys = [0.84, 0.95, 1.08, 1.2, 1.3, 1.38, 1.44, 1.48];
+  const rx = [0.205, 0.192, 0.19, 0.202, 0.208, 0.212, 0.165, 0.09];
+  const rz = [0.15, 0.142, 0.142, 0.152, 0.152, 0.13, 0.1, 0.07];
+  const zo = [0, 0, 0.004, 0.012, 0.012, 0, -0.008, -0.006];
+  const pick = (a: number[]) => (hi ? a : [a[0], a[2], a[4], a[6], a[7]]);
+  add(lathe(pick(ys), pick(rx), pick(rz), seg, 0, pick(zo)), PART.torso, REGION.raincoat);
+  add(lathe([0.5, 0.62, 0.76, 0.9], [0.245, 0.232, 0.216, 0.208], [0.19, 0.178, 0.162, 0.152], seg + 2), PART.skirt, REGION.raincoat);
+  for (const s of [-1, 1]) {
+    const x = s * shoulderX;
+    add(lathe([J.elbowY - 0.02, 1.24, J.shoulderY + 0.05], [0.052, 0.06, 0.066], [0.054, 0.062, 0.068], lseg, x), s < 0 ? PART.upperL : PART.upperR, REGION.raincoat);
+    add(lathe([0.88, 0.97, J.elbowY + 0.02], [0.044, 0.05, 0.054], [0.046, 0.052, 0.056], lseg, x), s < 0 ? PART.foreL : PART.foreR, REGION.raincoat);
+  }
+  const hood = lathePartial([1.45, 1.52, 1.6, 1.67, 1.715, 1.738], [0.1, 0.104, 0.106, 0.098, 0.07, 0.015], [0.11, 0.116, 0.118, 0.108, 0.078, 0.015], hi ? 10 : 6, 0.62, Math.PI * 2 - 0.62, [-0.01, -0.012, -0.014, -0.014, -0.012, -0.01]);
+  add(bothSides(hood, new THREE.Vector3(0, -0.004, 0.004)), PART.head, REGION.raincoat);
+}
+
 export function buildHuman(variant: Variant, lod: 0 | 1): THREE.BufferGeometry {
   const parts: THREE.BufferGeometry[] = [];
   const add: Add = (g, part, region) => parts.push(tag(g, part, region));
@@ -251,6 +346,7 @@ function buildMan(add: Add, lod: 0 | 1): void {
   add(obox(0.03, 0.5, 0.015, -0.07, 1.22, -0.105, 0, 0, 0.62), PART.bag, REGION.bag);
   // Cap (white Gandhi topi / dark cap) — shown per instance.
   add(lathe([1.66, 1.7, 1.725], [0.085, 0.082, 0.07], [0.1, 0.098, 0.03], lseg), PART.head, REGION.cap);
+  rainGear(add, hi, lseg, J.shoulderX, 0.153);
 }
 
 /**
@@ -358,6 +454,7 @@ function buildTraditional(add: Add, variant: 'woman' | 'saree', lod: 0 | 1): voi
     if (hi) add(lathe([0.9, 0.925], [0.036, 0.036], [0.038, 0.038], 6, x), fore, REGION.accent); // bangles
   }
   femaleBags(add, lseg);
+  rainGear(add, hi, lseg, shoulderX, 0.133);
 }
 
 /** Young man: a T-shirt or casual shirt, jeans and sneakers; a sling bag or backpack, a cap now and then. */
@@ -407,6 +504,7 @@ function buildLad(add: Add, lod: 0 | 1): void {
   // Cap (visor forward).
   add(lathe([1.64, 1.69, 1.725], [0.088, 0.085, 0.06], [0.104, 0.1, 0.07], lseg), PART.head, REGION.cap);
   add(obox(0.15, 0.012, 0.09, 0, 1.645, 0.12, -0.12), PART.head, REGION.cap);
+  rainGear(add, hi, lseg, shoulderX, 0.149);
 }
 
 /**
@@ -470,4 +568,5 @@ function buildWoman(add: Add, lod: 0 | 1): void {
     if (hi && s < 0) add(lathe([0.9, 0.918], [0.033 * k, 0.033 * k], [0.035 * k, 0.035 * k], 6, x), fore, REGION.accent); // watch / bracelet
   }
   femaleBags(add, lseg);
+  rainGear(add, hi, lseg, shoulderX, 0.129);
 }

@@ -4,6 +4,7 @@ import { RNG } from '../../core/Random';
 import type { GeoRoad } from '../../world/city/City';
 import type { StationMaterials } from '../../world/churchgate/StationMaterials';
 import { buildVehicle, type VehicleKind } from './VehicleGeometry';
+import { WEATHER } from '../../gfx/Weather';
 
 interface Lane {
   id: number;
@@ -308,7 +309,9 @@ export class Traffic {
             if (yieldTo(probe.x, probe.z, 1.5)) gap = Math.min(gap, ahead - v.s - v.len / 2 + 1.0);
           }
         }
-        const want = Math.min(v.max, Math.max(0, (gap - 2.5) * 0.9));
+        // In the rain: slower, and a longer gap to the one in front on the wet road.
+        const wet = WEATHER.amount;
+        const want = Math.min(v.max * (1 - 0.18 * wet - 0.06 * WEATHER.heavy), Math.max(0, (gap - 2.5 - 1.5 * wet) * 0.9));
         const acc = want > v.speed ? 1.6 : 4.5;
         v.speed += THREE.MathUtils.clamp(want - v.speed, -acc * dt, acc * dt);
         v.s += v.speed * dt;

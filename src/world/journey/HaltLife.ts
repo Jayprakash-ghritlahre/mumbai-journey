@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RNG } from '../../core/Random';
 import { Riders } from '../../entities/crowd/Riders';
+import { closingPose } from '../../entities/crowd/CrowdMaterial';
 import { makeLook, type Look } from '../../entities/crowd/Looks';
 import type { AmbientVolume } from '../../gfx/AmbientVolume';
 import { CAR } from '../../entities/train/Livery';
@@ -276,7 +277,9 @@ export class HaltLife {
     const o = pts[a0 + 1] + (pts[b0 + 1] - pts[a0 + 1]) * k;
     const y = pts[a0 + 2] + (pts[b0 + 2] - pts[a0 + 2]) * k;
     const a = Math.atan2(pts[b0 + 1] - pts[a0 + 1], pts[b0] - pts[a0]);
-    put(p, rd, o, y, a, (s * Math.PI * 2) / STRIDE, 1, 0);
+    // An umbrella folds over the last few metres to the door, and goes up again off the train.
+    const closing = Math.max(p.hideAfter ? 1 - (total - s) / 3 : 0, p.hideBefore ? 1 - s / 3 : 0);
+    put(p, rd, o, y, a, (s * Math.PI * 2) / STRIDE, 1, closingPose(0, closing));
   }
 
   /** People near a world point (voices and footsteps). */

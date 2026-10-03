@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { RNG } from '../../core/Random';
 import { POSE, makeLook, type Look } from '../../entities/crowd/Looks';
+import { closingPose } from '../../entities/crowd/CrowdMaterial';
 import { Riders } from '../../entities/crowd/Riders';
 import { CAR } from '../../entities/train/Livery';
 import type { FreeTrain, TrainSystem } from '../../entities/train/TrainSystem';
 import type { AmbientVolume } from '../../gfx/AmbientVolume';
+import { WEATHER } from '../../gfx/Weather';
 import type { Railway } from '../journey/Railway';
 import type { MiraTimetable } from './MiraBoards';
 import { mat4 } from './MiraCtx';
@@ -662,7 +664,7 @@ export class MiraPeople {
       }
       let amp = 0;
       if (p.mode === 'walk') {
-        let step = p.speed * dt;
+        let step = p.speed * (1 + 0.12 * WEATHER.amount) * dt;
         let guard = 0;
         while (step > 1e-6 && p.pi < p.path.length && guard++ < 64) {
           const t = p.path[p.pi];
@@ -719,7 +721,9 @@ export class MiraPeople {
       const d2 = (p.x - camLocal.x) ** 2 + (p.z - camLocal.z) ** 2;
       if (d2 > far2) continue;
       if (d2 < 0.3 && Math.abs(p.y - camLocal.y + 1.6) < 1) continue;
-      (d2 < near2 ? R : RF).put(p.look, p.x, p.y, p.z, p.h, p.phase, amp, p.mode === 'walk' || p.mode === 'board' ? 0 : p.pose);
+      // Stepping aboard, the umbrella folds over the last few metres to the door.
+      const pose = p.mode === 'board' && p.target ? closingPose(0, 1 - (Math.hypot(p.target.x - p.x, p.target.z - p.z) - 0.6) / 3.4) : p.mode === 'walk' ? 0 : p.pose;
+      (d2 < near2 ? R : RF).put(p.look, p.x, p.y, p.z, p.h, p.phase, amp, pose);
     }
     R.end();
     RF.end();
@@ -1046,7 +1050,9 @@ export class MiraTraffic {
       const h1 = this.at(r, v.s + 12, 0).h;
       let dh = Math.abs(h1 - h0);
       if (dh > Math.PI) dh = Math.PI * 2 - dh;
-      let target = v.want * Math.max(0.3, 1 - dh * 0.9);
+      // Slower on the wet road in the rain (two-wheelers most of all).
+      const rain = WEATHER.amount * (v.kind === 'bike' || v.kind === 'scooter' ? 0.24 : 0.15) + WEATHER.heavy * 0.06;
+      let target = v.want * (1 - rain) * Math.max(0.3, 1 - dh * 0.9);
       if (gap < 2.5) target = 0;
       else if (gap < 2.5 + v.v * 1.6) target = Math.min(target, (gap - 2.5) / 1.6);
       const acc = target > v.v ? 1.6 : 4.5;

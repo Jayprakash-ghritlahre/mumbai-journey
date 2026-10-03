@@ -48,6 +48,14 @@ west past Sector 1 and up Poonam Sagar Road, past its median and shops, to the s
 station junction. The auto turns into the approach and drops you at the forecourt; you pay and walk
 into the station. The route follows the real streets (OpenStreetMap). See [AUTO_RIDE.md](AUTO_RIDE.md).
 
+**Mumbai Monsoon (weather, first version).** A weather layer over any time of day: choose **Clear** or
+**Mumbai Monsoon** in the menu, or press `R` while playing. Under a low grey deck the rain comes and
+goes in heavier bursts. Streets, platforms and tracks are soaked, with puddles that reflect people,
+buses and lamps. Umbrellas go up and raincoats come out, and people walk hunched and leave the open
+sea wall. It rains past the auto's wiper and the local's open doors. At Marine Drive the high-tide
+sea is rough, and big waves throw spray over the wall. All of it has rain sound, from the drumming
+on canopies to the patter on the auto's hood. See [MONSOON.md](MONSOON.md).
+
 ## Run it
 
 ```bash
@@ -64,10 +72,11 @@ Requires Node 18+ and a WebGL2 browser (Chrome, Edge, Firefox or Safari 16+).
 | | |
 |---|---|
 | **Start journey** | Cinematic (~10 min): Mira Road station, the Churchgate fast coming in, boarding, the ride down the Western line (dissolves skip the hour-long journey), and the arrival on Churchgate's PF 3. You get off, walk down the platform and out of the west exit, then along V.N. Road into the sunset. You wait for the green man, cross Marine Drive and reach the sea wall, then stroll on to Nariman Point as night falls. `Esc` / Skip ends it; the end card offers **Keep walking from here**. |
-| **Auto to the station** | Start inside your society's gate in Shanti Nagar. Walk out to the lane; at the kerb press `E` (or wait) and an auto pulls up beside you. `E` (or step in on the left) to get in. Then you ride: mouse to look round from the seat, `N` to skip to the next stretch. At the forecourt `E` pays ₹26 and you step out to carry on on foot (the Churchgate fast is due in about 2½ minutes). `T` changes the time of day. |
+| **Auto to the station** | Start inside your society's gate in Shanti Nagar. Walk out to the lane; at the kerb press `E` (or wait) and an auto pulls up beside you. `E` (or step in on the left) to get in. Then you ride: mouse to look round from the seat, `N` to skip to the next stretch. At the forecourt `E` pays ₹26 and you step out to carry on on foot (the Churchgate fast is due in about 2½ minutes). `T` changes the time of day, `R` the weather. |
 | **Explore Mira Road** | Start on the station forecourt. Walk up the steps into the booking hall, over the bridges to any platform, along the skywalk or out to the auto stand. The Churchgate fast is due on PF 4 in about 2½ minutes (the boards show it). It waits while you are on PF 4; board it through an open door of the second coach from the south end. Miss it, and the next one comes in 7 minutes. |
 | **Ride the local** | Start on Mira Road's PF 4 as the train comes in; it waits for you. Walk in through an open door of your coach (the second from the south end). Inside: `W A S D` move (the aisle, the vestibules, the open doorway), mouse look, `E` sit on a free seat or stand up, `N` skip to the next stretch. The train stops at Borivali and Dadar (you stay aboard). At Churchgate, walk out of a door onto the platform and carry on on foot. |
-| **Explore Churchgate / Marine Drive / Nariman Point** | Click to capture the mouse. `W A S D` walk, `Shift` run, mouse look, `T` cycle time of day, `F` fly mode (`E`/`Q` up/down), `` ` `` performance stats, `Esc` menu. Touch: left third of the screen moves, the rest looks. The whole route is walkable. |
+| **Weather** | The menu's **Weather** row, `R` while playing (explore, the auto, the ride), or `?weather=monsoon` in the URL. It works with every time of day and sets in over a few seconds. |
+| **Explore Churchgate / Marine Drive / Nariman Point** | Click to capture the mouse. `W A S D` walk, `Shift` run, mouse look, `T` cycle time of day, `R` clear / Mumbai Monsoon, `F` fly mode (`E`/`Q` up/down), `` ` `` performance stats, `Esc` menu. Touch: left third of the screen moves, the rest looks. The whole route is walkable. |
 
 ## Technology
 
@@ -124,7 +133,9 @@ src/
   app/App.ts                 modes (menu / cinematic / explore), game clock, test API
   core/                      Engine (renderer, post chain, shadows, dynamic resolution),
                              Input, Collision (floors + oriented boxes), Solar, RNG/noise
-  gfx/                       sky, time-of-day palettes, fog + volumetric sun shafts, grading,
+  gfx/                       sky, time-of-day palettes, weather (Weather: the monsoon's state; Wet: wet
+                             surfaces and puddles; WetReflections: screen-space reflections; Rain),
+                             fog + volumetric sun shafts, grading,
                              procedural textures (concrete, tiles, ballast, roofing, decals),
                              signage and LED atlases, facade texture array, "ambient volume"
                              (top-down baked sky-visibility / lamp map used by every material)
@@ -143,14 +154,16 @@ src/
                              streets and forecourt, signs, LED boards and timetable, vehicles,
                              and the life (locals calling, crowds, traffic); own collision + light map
   world/route/               Churchgate → Marine Drive: RouteLayout (fitted road geometry), VNRoad,
-                             MarineDrive (promenade, sea wall, tetrapods), Ocean, Skyline, Signals,
+                             MarineDrive (promenade, sea wall, tetrapods), Ocean, SeaSpray (the monsoon's
+                             big waves and spray), Skyline, Signals,
                              DecoDressing (Art Deco corridor, Soona Mahal), props, RouteJourney (film)
   entities/auto/             HeroAuto: the auto you ride, inside and out, its driver and fare meter
   entities/train/            EMU geometry + livery, HeroCar (the detailed coach you ride), Timetable,
                              TrainSystem (arrive → dwell → depart, free trains, the approach curve)
   entities/crowd/            GPU-skinned instanced people, steering, boarding/alighting
   entities/traffic/          left-hand traffic on the OSM road graph, taxis, BEST buses
-  audio/                     Web Audio: HRTF-positioned trains, horns, crowd, PA chime + speech
+  audio/                     Web Audio: HRTF-positioned trains, horns, crowd, PA chime + speech,
+                             RainAudio (the monsoon: the fall, roofs, the auto's hood, wind, waves)
   camera/                    cinematic shot player, first-person walking controls, RideControls (in the car)
 tools/
   fetch-osm.mjs              downloads OSM data (Overpass API)  → data/osm/
@@ -196,7 +209,8 @@ What keeps it fast:
 - Zone visibility between the train shed and the street.
 - Dynamic resolution scaling.
 
-The menu offers Low / Medium / High quality. Low drops SSAO, SMAA and volumetrics.
+The menu offers Low / Medium / High quality. Low drops SSAO, SMAA and volumetrics, and in the
+monsoon the wet reflections and most of the rain drops (MONSOON.md §9).
 
 ## Audio
 
